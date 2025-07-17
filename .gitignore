@@ -1,0 +1,25 @@
+# dependencies
+/node_modules/
+
+# environment files
+.env
+.env.*.local
+
+# logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# database temp/backups
+*.sqlite
+*.sqlite3
+*.bak
+*.dump
+
+# misc
+.DS_Store
+.vscode/
+.idea/
+*.local

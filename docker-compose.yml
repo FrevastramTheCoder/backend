@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgis/postgis:15-3.3
+    container_name: ardhi_db
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASS:-yourpassword}
+      POSTGRES_DB: ${DB_NAME:-ardhi_spatial}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres-init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-ardhi_spatial}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    container_name: ardhi_api
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - NODE_ENV=production
+      - JWT_SECRET=${JWT_SECRET}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASS=${DB_PASS:-frevastram@pg}
+      - DB_HOST=db
+      - DB_NAME=${DB_NAME:-ardhi_spatial}
+      - DB_PORT=5432
+    volumes:
+      - ./uploads:/app/uploads
+      - ./:/app
+      - /app/node_modules
+    ports:
+      - "5000:5000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  postgres_data:
