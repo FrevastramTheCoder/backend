@@ -1,3 +1,4 @@
+// routes/shapefileUpload.js
 
 const express = require('express');
 const fs = require('fs');
@@ -9,11 +10,16 @@ const { Pool } = require('pg');
 const { promisify } = require('util');
 
 const router = express.Router();
-const unlink = promisify(fs.unlink);
-const rmdir = promisify(fs.rm || fs.rmdir); // Node 14+ uses fs.rm
-const pool = new Pool();
 
-// Configure multer for file uploads
+const unlink = promisify(fs.unlink);
+const rmdir = promisify(fs.rm || fs.rmdir);
+
+const pool = new Pool({
+  // Configure your DB here or rely on DATABASE_URL env variable
+  // connectionString: process.env.DATABASE_URL,
+});
+
+// Multer setup
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const uploadDir = path.join(__dirname, '..', 'uploads', 'shapefiles');
@@ -41,7 +47,82 @@ const upload = multer({
   limits: { fileSize: 100 * 1024 * 1024 } // 100MB
 });
 
-// Recursively get all files from a directory
+// Whitelist valid dataset types (table names)
+const allowedDatasets = [
+  'roads',
+  'buildings',
+  'vegetation',
+  'footpaths',
+  'waterbodies',
+  // add your datasets here
+];
+
+// Helper function to process shapefile and insert data
+async function processShapefile(datasetType, shpPath, dbfPath) {
+  if (!allowedDatasets.includes(datasetType)) {
+    throw new Error('Invalid dataset type');
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('CREATE EXTENSION IF NOT EXISTS postgis');
+
+    const source = await shapefile.open(shpPath, dbfPath);
+    let result = await source.read();
+    if (result.done) throw new Error('Shapefile contains no features');
+
+    const firstFeature = result.value;
+    const propKeys = Object.keys(firstFeature.properties || {});
+
+    // Create table dynamically
+    const columnDefs = propKeys.map(k => `"${k}" TEXT`).join(', ');
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS "${datasetType}" (
+        id SERIAL PRIMARY KEY,
+        ${columnDefs},
+        geom GEOMETRY(GEOMETRY, 4326)
+      )
+    `);
+
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_${datasetType}_geom ON "${datasetType}" USING GIST (geom)`);
+
+    const insertQuery = `
+      INSERT INTO "${datasetType}" (${propKeys.map(k => `"${k}"`).join(', ')}, geom)
+      VALUES (${propKeys.map((_, i) => `$${i + 1}`).join(', ')}, ST_GeomFromGeoJSON($${propKeys.length + 1}))
+    `;
+
+    let featuresProcessed = 0;
+
+    while (!result.done) {
+      const feature = result.value;
+      if (!feature || !feature.geometry) {
+        result = await source.read();
+        continue;
+      }
+
+      const values = [
+        ...propKeys.map(k => feature.properties[k] ?? null),
+        JSON.stringify(feature.geometry)
+      ];
+
+      await client.query(insertQuery, values);
+      featuresProcessed++;
+      result = await source.read();
+    }
+
+    await client.query('COMMIT');
+    return featuresProcessed;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// Utility: recursively list files
 function walkSync(dir, filelist = []) {
   const files = fs.readdirSync(dir);
   files.forEach((file) => {
@@ -54,73 +135,6 @@ function walkSync(dir, filelist = []) {
     }
   });
   return filelist;
-}
-
-// Process shapefile and insert into database
-async function processShapefile(datasetType, shpPath, dbfPath) {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-
-    const source = await shapefile.open(shpPath, dbfPath);
-    let result = await source.read();
-    if (result.done) throw new Error('Shapefile contains no features');
-
-    const firstFeature = result.value;
-    const propKeys = Object.keys(firstFeature.properties || {});
-    const columnDefinitions = propKeys.map(k => `"${k}" TEXT`).join(', ');
-
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS "${datasetType}" (
-        id SERIAL PRIMARY KEY,
-        ${columnDefinitions},
-        geom GEOMETRY(GEOMETRY, 4326)
-      )
-    `);
-
-    const insertQuery = `
-      INSERT INTO "${datasetType}" (${propKeys.map(k => `"${k}"`).join(', ')}, geom)
-      VALUES (${propKeys.map((_, i) => `$${i + 1}`).join(', ')}, ST_GeomFromGeoJSON($${propKeys.length + 1}))
-    `;
-
-    let featuresProcessed = 0;
-    let batch = [];
-
-    do {
-      const feature = result.value;
-      if (!feature || !feature.geometry) continue;
-
-      const values = [
-        ...propKeys.map(k => feature.properties[k] ?? null),
-        JSON.stringify(feature.geometry)
-      ];
-      batch.push(values.flat());
-      featuresProcessed++;
-
-      if (batch.length >= 100) {
-        for (const vals of batch) {
-          await client.query(insertQuery, vals);
-        }
-        batch = [];
-      }
-
-      result = await source.read();
-    } while (!result.done);
-
-    if (batch.length > 0) {
-      for (const vals of batch) {
-        await client.query(insertQuery, vals);
-      }
-    }
-
-    await client.query('COMMIT');
-    return featuresProcessed;
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
-  }
 }
 
 // Upload route
@@ -143,7 +157,7 @@ router.post('/:datasetType', upload.single('file'), async (req, res) => {
     const shxExists = extractedFiles.some(f => f.toLowerCase().endsWith('.shx'));
 
     if (!shpPath || !dbfPath || !shxExists) {
-      throw new Error('Shapefile (.shp), .shx, or DBF (.dbf) files missing in ZIP');
+      throw new Error('Missing .shp, .shx, or .dbf file in ZIP');
     }
 
     const featuresProcessed = await processShapefile(datasetType, shpPath, dbfPath);
@@ -159,7 +173,6 @@ router.post('/:datasetType', upload.single('file'), async (req, res) => {
   } catch (err) {
     console.error('Upload error:', err);
 
-    // Cleanup
     try {
       if (fs.existsSync(zipPath)) await unlink(zipPath);
       if (fs.existsSync(extractDir)) await rmdir(extractDir, { recursive: true });
