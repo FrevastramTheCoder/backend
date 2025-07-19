@@ -757,33 +757,33 @@ const validateConfig = () => {
     }
   });
 };
-
 validateConfig();
 
 // =============================================
-// REDIS CLIENT SETUP
+// REDIS CLIENT SETUP WITH FALLBACK MEMORY STORE
 // =============================================
 let sessionStore;
-let redisErrorLogged = false; // Flag to suppress redundant error logs
+let redisErrorLogged = false;
+
 const redisClient = createClient({
   url: process.env.REDIS_URL,
   socket: {
-    reconnectStrategy: (retries) => {
+    reconnectStrategy: retries => {
       if (retries > 10) {
         if (!redisErrorLogged) {
           console.warn('⚠️ Redis connection failed after 10 retries, falling back to in-memory session store');
           redisErrorLogged = true;
+          sessionStore = new session.MemoryStore();
         }
-        sessionStore = new session.MemoryStore();
-        return false; // Stop retrying
+        return false; // stop retrying
       }
-      return Math.min(retries * 100, 3000); // Retry every 100ms, max 3s
+      return Math.min(retries * 100, 3000); // retry delay
     }
   }
 });
 
-redisClient.on('error', (err) => {
-  if (redisErrorLogged) return; // Suppress errors after fallback
+redisClient.on('error', err => {
+  if (redisErrorLogged) return;
   if (err.code === 'ENOTFOUND') {
     console.error(`Redis DNS Error: Cannot resolve ${process.env.REDIS_URL}. Check REDIS_URL.`);
   } else {
@@ -793,8 +793,8 @@ redisClient.on('error', (err) => {
 redisClient.on('connect', () => console.log('Redis Client Connected'));
 redisClient.on('ready', () => {
   console.log('Redis Client Ready');
-  sessionStore = new RedisStore({ client: redisClient }); // Initialize only when ready
-  redisErrorLogged = false; // Reset error flag on successful connection
+  sessionStore = new RedisStore({ client: redisClient });
+  redisErrorLogged = false;
 });
 redisClient.on('end', () => {
   if (!redisErrorLogged) {
@@ -803,12 +803,13 @@ redisClient.on('end', () => {
   }
 });
 
-// Initialize session store (will be updated to RedisStore if connection succeeds)
+// Start Redis connection and fallback if it fails
 sessionStore = new session.MemoryStore();
 redisClient.connect().catch(err => {
   if (!redisErrorLogged) {
     console.error('Redis Connection Failed:', err);
     redisErrorLogged = true;
+    sessionStore = new session.MemoryStore();
   }
 });
 
@@ -836,16 +837,9 @@ app.use(session({
 
 app.use(express.json({
   limit: '50mb',
-  verify: (req, res, buf) => {
-    req.rawBody = buf.toString();
-  }
+  verify: (req, res, buf) => { req.rawBody = buf.toString(); }
 }));
-
-app.use(express.urlencoded({
-  extended: true,
-  limit: '50mb',
-  parameterLimit: 1000
-}));
+app.use(express.urlencoded({ extended: true, limit: '50mb', parameterLimit: 1000 }));
 
 app.use(passport.initialize());
 app.use(passport.session());
@@ -1136,88 +1130,63 @@ const fileFilter = (req, file, cb) => {
 
 const upload = multer({
   storage,
-  limits: { fileSize: 50 * 1024 * 1024 },
-  fileFilter
-}).single('file');
+  fileFilter,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+}).single('shapefile');
 
 // =============================================
 // SHAPEFILE UPLOAD ROUTE
 // =============================================
-app.post('/upload/:dataset', authenticate, validateDataset, (req, res, next) => {
-  upload(req, res, async (err) => {
+app.post('/api/shapefile/upload', authenticate, (req, res) => {
+  upload(req, res, async function (err) {
     if (err) {
       if (err.code === 'LIMIT_FILE_TYPES') {
-        return res.status(422).json({ error: 'Only .zip files allowed!' });
+        return res.status(422).json({ error: err.message });
       }
       if (err.code === 'LIMIT_FILE_SIZE') {
-        return res.status(422).json({ error: 'File too large. Max 50MB allowed!' });
+        return res.status(422).json({ error: 'File too large. Max 10MB allowed.' });
       }
-      return res.status(400).json({ error: err.message });
+      return res.status(500).json({ error: err.message });
     }
-
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
     const zipPath = req.file.path;
-    const extractDir = path.resolve('temp', `shp_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+    const unzipDir = path.join(path.dirname(zipPath), path.basename(zipPath, '.zip'));
 
     try {
-      fs.mkdirSync(extractDir, { recursive: true });
       const zip = new AdmZip(zipPath);
-      zip.extractAllTo(extractDir, true);
+      zip.extractAllTo(unzipDir, true);
 
-      const files = fs.readdirSync(extractDir);
+      // Find .shp file inside extracted folder
+      const files = fs.readdirSync(unzipDir);
       const shpFile = files.find(f => f.toLowerCase().endsWith('.shp'));
-      const dbfFile = files.find(f => f.toLowerCase().endsWith('.dbf'));
-      if (!shpFile || !dbfFile) {
-        throw new Error('Shapefile (.shp) or DBF (.dbf) files missing in ZIP');
+      if (!shpFile) throw new Error('No .shp file found in the ZIP');
+
+      // Read shapefile
+      const shpFilePath = path.join(unzipDir, shpFile);
+      const geojson = { type: 'FeatureCollection', features: [] };
+
+      const source = await shapefile.open(shpFilePath);
+      while (true) {
+        const result = await source.read();
+        if (result.done) break;
+        geojson.features.push({ type: 'Feature', geometry: result.value.geometry, properties: result.value.properties });
       }
 
-      const shpFilePath = path.join(extractDir, shpFile);
-      const dbfFilePath = path.join(extractDir, dbfFile);
-
-      const source = await shapefile.open(shpFilePath, dbfFilePath);
-
-      let resultFeature = await source.read();
-      if (resultFeature.done) {
-        throw new Error('Shapefile contains no features');
-      }
-
-      const client = await pool.connect();
-      try {
-        await client.query('BEGIN');
-
-        await client.query(`
-          CREATE TABLE IF NOT EXISTS ${req.params.dataset} (
-            id SERIAL PRIMARY KEY,
-            properties JSONB
-          )
-        `);
-
-        while (!resultFeature.done) {
-          const feature = resultFeature.value;
-          await client.query(
-            `INSERT INTO ${req.params.dataset} (properties) VALUES ($1)`,
-            [feature.properties || feature]
-          );
-          resultFeature = await source.read();
-        }
-
-        await client.query('COMMIT');
-      } catch (dbErr) {
-        await client.query('ROLLBACK');
-        throw dbErr;
-      } finally {
-        client.release();
-      }
-
+      // Cleanup files after reading
       await unlinkAsync(zipPath);
-      await rmdirAsync(extractDir, { recursive: true, force: true });
+      await rmdirAsync(unzipDir, { recursive: true, force: true });
 
-      res.json({ message: 'Shapefile uploaded and processed successfully!' });
+      res.json({ message: 'Shapefile uploaded and processed', data: geojson });
     } catch (error) {
-      try { await unlinkAsync(zipPath); } catch {}
-      try { await rmdirAsync(extractDir, { recursive: true, force: true }); } catch {}
-      next(error);
+      // Cleanup files on error too
+      try {
+        await unlinkAsync(zipPath);
+        await rmdirAsync(unzipDir, { recursive: true, force: true });
+      } catch (cleanupErr) {
+        console.error('Error cleaning up after shapefile error:', cleanupErr);
+      }
+      res.status(500).json({ error: error.message });
     }
   });
 });
@@ -1225,228 +1194,178 @@ app.post('/upload/:dataset', authenticate, validateDataset, (req, res, next) => 
 // =============================================
 // AUTH ROUTES
 // =============================================
+
+// Register
 app.post('/api/auth/register', async (req, res, next) => {
   try {
-    const { name, email, password, role = 'user' } = req.body;
-    if (!name || !email || !password) return res.status(400).json({ error: 'Missing required fields' });
+    const { name, email, password } = req.body;
+    if (!name || !email || !password) return res.status(400).json({ error: 'Name, email, and password required' });
 
-    const userExists = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
-    if (userExists.rows.length > 0) return res.status(409).json({ error: 'Email already in use' });
+    const emailLower = email.toLowerCase();
+    const userExists = await pool.query('SELECT id FROM users WHERE email = $1', [emailLower]);
+    if (userExists.rowCount > 0) return res.status(409).json({ error: 'User already exists' });
 
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const hashedPassword = await bcrypt.hash(password, 12);
     const otp = generateOTP();
-    const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
 
-    const newUser = await pool.query(
-      `INSERT INTO users (name, email, password, role, is_verified, otp, otp_expires) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, name, email, role`,
-      [name, email, hashedPassword, role, false, otp, otpExpires]
+    const { rows } = await pool.query(
+      `INSERT INTO users (name, email, password, is_verified, otp, role) 
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, email, is_verified`,
+      [name, emailLower, hashedPassword, false, otp, 'user']
     );
 
+    // Send OTP email
     await transporter.sendMail({
-      from: `"ARU-SDMS" <${process.env.EMAIL_USER}>`,
-      to: email,
-      subject: 'Verify your email OTP',
-      text: `Your OTP code is: ${otp}. It expires in 10 minutes.`,
-      html: `<p>Your OTP code is: <strong>${otp}</strong>. It expires in 10 minutes.</p>`
+      from: `"ARU-SDMS" <${process.env.EMAIL_USER.trim()}>`,
+      to: emailLower,
+      subject: 'Verify your account OTP',
+      text: `Your OTP code is: ${otp}. It will expire shortly.`,
+      html: `<p>Your OTP code is: <b>${otp}</b>. It will expire shortly.</p>`
     });
 
-    res.status(201).json({
-      success: true,
-      message: 'Registration successful, please verify your email using OTP',
-      user: {
-        id: newUser.rows[0].id,
-        name,
-        email,
-        role
-      }
-    });
+    res.status(201).json({ message: 'User registered. Please verify your email.', user: { id: rows[0].id, name: rows[0].name, email: rows[0].email } });
   } catch (err) {
     next(err);
   }
 });
 
-app.post('/api/auth/verify-otp', async (req, res) => {
+// Verify OTP
+app.post('/api/auth/verify', async (req, res, next) => {
   try {
     const { email, otp } = req.body;
-    if (!email || !otp) return res.status(400).json({ message: 'Email and OTP are required' });
+    if (!email || !otp) return res.status(400).json({ error: 'Email and OTP required' });
 
-    const userRes = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-    if (userRes.rows.length === 0) return res.status(404).json({ message: 'User not found' });
+    const emailLower = email.toLowerCase();
+    const { rows } = await pool.query('SELECT id, otp, is_verified FROM users WHERE email = $1', [emailLower]);
+    if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
 
-    const user = userRes.rows[0];
-    if (user.is_verified) return res.status(400).json({ message: 'User already verified' });
+    const user = rows[0];
+    if (user.is_verified) return res.status(400).json({ error: 'User already verified' });
 
-    if (user.otp !== otp) return res.status(400).json({ message: 'Invalid OTP' });
+    if (user.otp !== otp) return res.status(400).json({ error: 'Invalid OTP' });
 
-    if (new Date(user.otp_expires) < new Date()) return res.status(400).json({ message: 'OTP expired' });
+    await pool.query('UPDATE users SET is_verified = true, otp = NULL WHERE id = $1', [user.id]);
 
-    await pool.query('UPDATE users SET is_verified = TRUE, otp = NULL, otp_expires = NULL WHERE email = $1', [email]);
-
-    res.json({ message: 'Email verified successfully!' });
+    res.json({ message: 'Email verified successfully. You can now login.' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-app.post('/api/auth/login', async (req, res) => {
+// Login
+app.post('/api/auth/login', async (req, res, next) => {
   try {
     const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ message: 'Email and password required' });
+    if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
 
-    const userRes = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-    if (userRes.rows.length === 0) return res.status(404).json({ message: 'User not found' });
+    const emailLower = email.toLowerCase();
+    const { rows } = await pool.query('SELECT * FROM users WHERE email = $1', [emailLower]);
+    if (rows.length === 0) return res.status(401).json({ error: 'Invalid email or password' });
 
-    const user = userRes.rows[0];
-    if (!user.is_verified) return res.status(401).json({ message: 'Email not verified' });
+    const user = rows[0];
+    if (!user.is_verified) return res.status(401).json({ error: 'Email not verified' });
 
-    const validPass = await bcrypt.compare(password, user.password);
-    if (!validPass) return res.status(401).json({ message: 'Incorrect password' });
+    const passwordMatch = await bcrypt.compare(password, user.password);
+    if (!passwordMatch) return res.status(401).json({ error: 'Invalid email or password' });
 
-    const token = jwt.sign(
-      { id: user.id, email: user.email, role: user.role },
-      process.env.JWT_SECRET.trim(),
-      { expiresIn: '1d' }
-    );
+    const tokenPayload = { id: user.id, email: user.email, role: user.role };
+    const token = jwt.sign(tokenPayload, process.env.JWT_SECRET.trim(), { expiresIn: '7d' });
 
-    res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
+    res.json({ message: 'Login successful', token, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-app.post('/api/auth/reset-password-request', async (req, res) => {
-  try {
-    const { email } = req.body;
-    if (!email) return res.status(400).json({ message: 'Email required' });
-
-    const userRes = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-    if (userRes.rows.length === 0) return res.status(404).json({ message: 'User not found' });
-
-    const otp = generateOTP();
-    const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
-
-    await pool.query('UPDATE users SET otp = $1, otp_expires = $2 WHERE email = $3', [otp, otpExpires, email]);
-
-    await transporter.sendMail({
-      from: `"ARU-SDMS" <${process.env.EMAIL_USER}>`,
-      to: email,
-      subject: 'Password Reset OTP',
-      text: `Your password reset OTP is: ${otp}. It expires in 10 minutes.`,
-      html: `<p>Your password reset OTP is: <strong>${otp}</strong>. It expires in 10 minutes.</p>`
+// Logout (optional, if using sessions)
+app.post('/api/auth/logout', (req, res) => {
+  req.logout(() => {
+    req.session.destroy(err => {
+      if (err) return res.status(500).json({ error: 'Logout failed' });
+      res.clearCookie('connect.sid');
+      res.json({ message: 'Logged out successfully' });
     });
-
-    res.json({ message: 'Password reset OTP sent to email' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/auth/reset-password', async (req, res) => {
-  try {
-    const { email, otp, newPassword } = req.body;
-    if (!email || !otp || !newPassword) return res.status(400).json({ message: 'Email, OTP and new password required' });
-
-    const userRes = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-    if (userRes.rows.length === 0) return res.status(404).json({ message: 'User not found' });
-
-    const user = userRes.rows[0];
-    if (user.otp !== otp) return res.status(400).json({ message: 'Invalid OTP' });
-    if (new Date(user.otp_expires) < new Date()) return res.status(400).json({ message: 'OTP expired' });
-
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
-    await pool.query('UPDATE users SET password = $1, otp = NULL, otp_expires = NULL WHERE email = $2', [hashedPassword, email]);
-
-    res.json({ message: 'Password reset successful' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  });
 });
 
 // =============================================
 // SOCIAL AUTH ROUTES
 // =============================================
-app.get('/auth/facebook', passport.authenticate('facebook', { scope: ['email'] }));
+if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+  app.get('/auth/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
 
-app.get('/auth/facebook/callback',
-  passport.authenticate('facebook', { failureRedirect: `${process.env.CLIENT_URL}/login` }),
-  (req, res) => {
-    const token = jwt.sign(
-      { id: req.user.id, email: req.user.email, role: req.user.role },
-      process.env.JWT_SECRET.trim(),
-      { expiresIn: '1d' }
-    );
-    res.redirect(`${process.env.CLIENT_URL}/social-login?token=${token}`);
-  }
-);
+  app.get('/auth/google/callback',
+    passport.authenticate('google', { failureRedirect: `${process.env.CLIENT_URL}/login` }),
+    (req, res) => {
+      // Generate JWT after successful login
+      const tokenPayload = { id: req.user.id, email: req.user.email, role: req.user.role };
+      const token = jwt.sign(tokenPayload, process.env.JWT_SECRET.trim(), { expiresIn: '7d' });
+      res.redirect(`${process.env.CLIENT_URL}/social-login?token=${token}`);
+    }
+  );
+}
 
-app.get('/auth/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
+if (process.env.FACEBOOK_CLIENT_ID && process.env.FACEBOOK_CLIENT_SECRET) {
+  app.get('/auth/facebook', passport.authenticate('facebook', { scope: ['email'] }));
 
-app.get('/auth/google/callback',
-  passport.authenticate('google', { failureRedirect: `${process.env.CLIENT_URL}/login` }),
-  (req, res) => {
-    const token = jwt.sign(
-      { id: req.user.id, email: req.user.email, role: req.user.role },
-      process.env.JWT_SECRET.trim(),
-      { expiresIn: '1d' }
-    );
-    res.redirect(`${process.env.CLIENT_URL}/social-login?token=${token}`);
-  }
-);
+  app.get('/auth/facebook/callback',
+    passport.authenticate('facebook', { failureRedirect: `${process.env.CLIENT_URL}/login` }),
+    (req, res) => {
+      const tokenPayload = { id: req.user.id, email: req.user.email, role: req.user.role };
+      const token = jwt.sign(tokenPayload, process.env.JWT_SECRET.trim(), { expiresIn: '7d' });
+      res.redirect(`${process.env.CLIENT_URL}/social-login?token=${token}`);
+    }
+  );
+}
 
-app.get('/auth/twitter', passport.authenticate('twitter'));
+if (process.env.TWITTER_CONSUMER_KEY && process.env.TWITTER_CONSUMER_SECRET) {
+  app.get('/auth/twitter', passport.authenticate('twitter'));
 
-app.get('/auth/twitter/callback',
-  passport.authenticate('twitter', { failureRedirect: `${process.env.CLIENT_URL}/login` }),
-  (req, res) => {
-    const token = jwt.sign(
-      { id: req.user.id, email: req.user.email, role: req.user.role },
-      process.env.JWT_SECRET.trim(),
-      { expiresIn: '1d' }
-    );
-    res.redirect(`${process.env.CLIENT_URL}/social-login?token=${token}`);
-  }
-);
+  app.get('/auth/twitter/callback',
+    passport.authenticate('twitter', { failureRedirect: `${process.env.CLIENT_URL}/login` }),
+    (req, res) => {
+      const tokenPayload = { id: req.user.id, email: req.user.email, role: req.user.role };
+      const token = jwt.sign(tokenPayload, process.env.JWT_SECRET.trim(), { expiresIn: '7d' });
+      res.redirect(`${process.env.CLIENT_URL}/social-login?token=${token}`);
+    }
+  );
+}
 
 // =============================================
 // HEALTH CHECK ROUTE
 // =============================================
 app.get('/api/health', async (req, res) => {
-  try {
-    const client = await pool.connect();
-    await client.query('SELECT 1');
-    client.release();
-    const redisStatus = redisClient.isReady ? 'connected' : 'disconnected';
-    res.json({ status: 'ok', db: 'connected', redis: redisStatus });
-  } catch (err) {
-    res.status(500).json({ status: 'error', db: 'disconnected', redis: redisClient.isReady ? 'connected' : 'disconnected', error: err.message });
-  }
+  const dbConnected = await testDatabaseConnection();
+  const redisConnected = redisClient.isReady;
+
+  res.json({
+    status: 'ok',
+    database: dbConnected ? 'connected' : 'disconnected',
+    redis: redisConnected ? 'connected' : 'disconnected',
+    serverTime: new Date()
+  });
 });
 
 // =============================================
 // GLOBAL ERROR HANDLER
 // =============================================
 app.use((err, req, res, next) => {
-  console.error('Global Error:', err.stack);
-  if (res.headersSent) return next(err);
-  res.status(500).json({ error: err.message || 'Internal Server Error' });
+  console.error('Server Error:', err);
+  const status = err.status || 500;
+  res.status(status).json({ error: err.message || 'Internal Server Error' });
 });
 
 // =============================================
 // START SERVER
 // =============================================
-async function startServer() {
-  const dbConnected = await testDatabaseConnection();
-  if (!dbConnected) {
-    console.warn('⚠️ Starting server without database connection. Some features may not work.');
-  }
-  if (!redisClient.isReady) {
-    console.warn('⚠️ Redis not connected. Using in-memory session store. Sessions may not persist.');
-  }
-  app.listen(PORT, () => {
-    console.log(`🚀 Server started on port ${PORT}`);
-  });
-}
+(async () => {
+  await testDatabaseConnection();
 
-startServer();
+  if (!redisClient.isReady) {
+    console.warn('⚠️ Redis not connected. Using in-memory session store. Sessions will not persist.');
+  }
+
+  app.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+  });
+})();
