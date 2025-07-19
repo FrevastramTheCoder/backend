@@ -687,17 +687,14 @@
 //   });
 // });
 
-// =============================================
-// MODULE IMPORTS
-// =============================================
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '.env') });
 
 const express = require('express');
 const cors = require('cors');
 const session = require('express-session');
-const RedisStore = require('connect-redis').default; // Updated for Redis
-const redis = require('redis');
+const RedisStore = require('connect-redis').default;
+const { createClient } = require('redis');
 const { Pool } = require('pg');
 const multer = require('multer');
 const fs = require('fs');
@@ -719,7 +716,7 @@ const rmdirAsync = promisify(fs.rm || fs.rmdir);
 // APP INITIALIZATION
 // =============================================
 const app = express();
-const PORT = process.env.PORT || 10000; // Updated for Render compatibility
+const PORT = process.env.PORT || 10000;
 
 // =============================================
 // CONFIG VALIDATION
@@ -727,13 +724,14 @@ const PORT = process.env.PORT || 10000; // Updated for Render compatibility
 const validateConfig = () => {
   const requiredVars = [
     'JWT_SECRET', 'SESSION_SECRET', 'DB_USER', 'DB_PASS', 'DB_HOST', 'DB_NAME', 'DB_PORT',
-    'EMAIL_USER', 'EMAIL_PASS', 'CORS_ORIGIN', 'CLIENT_URL', 'SERVER_URL',
+    'EMAIL_USER', 'EMAIL_PASS', 'CORS_ORIGIN', 'CLIENT_URL', 'SERVER_URL', 'REDIS_URL'
+  ];
+  const optionalVars = [
     'FACEBOOK_CLIENT_ID', 'FACEBOOK_CLIENT_SECRET',
     'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET',
-    'TWITTER_CONSUMER_KEY', 'TWITTER_CONSUMER_SECRET',
-    'REDIS_URL' // Added for Redis
+    'TWITTER_CONSUMER_KEY', 'TWITTER_CONSUMER_SECRET'
   ];
-  const missingVars = requiredVars.filter(v => !process.env[v]);
+  const missingVars = requiredVars.filter(v => !process.env[v] || process.env[v].trim() === '');
 
   if (missingVars.length > 0) {
     console.error('❌ Missing required environment variables:');
@@ -745,38 +743,93 @@ const validateConfig = () => {
     process.exit(1);
   }
   console.log('✅ Environment variables validated successfully');
-  console.table(requiredVars.map(varName => ({
+  console.table([...requiredVars, ...optionalVars].map(varName => ({
     Variable: varName,
-    Status: 'PRESENT',
-    Value: varName.toLowerCase().includes('secret') ? '*****' : process.env[varName]
+    Status: process.env[varName] ? 'PRESENT' : 'NOT PRESENT',
+    Value: varName.toLowerCase().includes('secret') || varName.toLowerCase().includes('pass')
+      ? '*****'
+      : process.env[varName] || 'N/A'
   })));
+
+  optionalVars.forEach(varName => {
+    if (process.env[varName] && process.env[varName].startsWith('your_')) {
+      console.warn(`⚠️ Warning: ${varName} appears to be a placeholder value: ${process.env[varName]}`);
+    }
+  });
 };
 
 validateConfig();
 
 // =============================================
+// REDIS CLIENT SETUP
+// =============================================
+let sessionStore;
+let redisErrorLogged = false; // Flag to suppress redundant error logs
+const redisClient = createClient({
+  url: process.env.REDIS_URL,
+  socket: {
+    reconnectStrategy: (retries) => {
+      if (retries > 10) {
+        if (!redisErrorLogged) {
+          console.warn('⚠️ Redis connection failed after 10 retries, falling back to in-memory session store');
+          redisErrorLogged = true;
+        }
+        sessionStore = new session.MemoryStore();
+        return false; // Stop retrying
+      }
+      return Math.min(retries * 100, 3000); // Retry every 100ms, max 3s
+    }
+  }
+});
+
+redisClient.on('error', (err) => {
+  if (redisErrorLogged) return; // Suppress errors after fallback
+  if (err.code === 'ENOTFOUND') {
+    console.error(`Redis DNS Error: Cannot resolve ${process.env.REDIS_URL}. Check REDIS_URL.`);
+  } else {
+    console.error('Redis Client Error:', err);
+  }
+});
+redisClient.on('connect', () => console.log('Redis Client Connected'));
+redisClient.on('ready', () => {
+  console.log('Redis Client Ready');
+  sessionStore = new RedisStore({ client: redisClient }); // Initialize only when ready
+  redisErrorLogged = false; // Reset error flag on successful connection
+});
+redisClient.on('end', () => {
+  if (!redisErrorLogged) {
+    console.log('Redis Client Disconnected');
+    redisErrorLogged = true;
+  }
+});
+
+// Initialize session store (will be updated to RedisStore if connection succeeds)
+sessionStore = new session.MemoryStore();
+redisClient.connect().catch(err => {
+  if (!redisErrorLogged) {
+    console.error('Redis Connection Failed:', err);
+    redisErrorLogged = true;
+  }
+});
+
+// =============================================
 // MIDDLEWARE
 // =============================================
-// Create Redis client
-const redisClient = redis.createClient({ url: process.env.REDIS_URL });
-redisClient.connect().catch(console.error);
-
 app.use(cors({
-  origin: process.env.CORS_ORIGIN, // https://aru-sdms.vercel.app
+  origin: process.env.CORS_ORIGIN.trim(),
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
   credentials: true
 }));
 
-// Session middleware with RedisStore
 app.use(session({
-  store: new RedisStore({ client: redisClient }),
-  secret: process.env.SESSION_SECRET,
+  store: sessionStore,
+  secret: process.env.SESSION_SECRET.trim(),
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: process.env.NODE_ENV === 'production', // HTTPS on Render
-    maxAge: 24 * 60 * 60 * 1000, // 24 hours
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: 24 * 60 * 60 * 1000,
     sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax'
   }
 }));
@@ -823,19 +876,19 @@ app.get('/', (req, res) => {
 // DATABASE CONNECTION
 // =============================================
 const pool = new Pool({
-  user: process.env.DB_USER,
-  host: process.env.DB_HOST,
-  database: process.env.DB_NAME,
-  password: process.env.DB_PASS,
+  user: process.env.DB_USER.trim(),
+  host: process.env.DB_HOST.trim(),
+  database: process.env.DB_NAME.trim(),
+  password: process.env.DB_PASS.trim(),
   port: Number(process.env.DB_PORT),
-  ssl: process.env.DB_SSL === 'true' ? {
-    rejectUnauthorized: false
-  } : false,
+  ssl: { rejectUnauthorized: false },
   connectionTimeoutMillis: 10000,
   idleTimeoutMillis: 30000,
   max: 20,
   allowExitOnIdle: true
 });
+
+pool.on('error', (err) => console.error('PostgreSQL Pool Error:', err));
 
 const testDatabaseConnection = async () => {
   const start = Date.now();
@@ -850,9 +903,10 @@ const testDatabaseConnection = async () => {
       'PostgreSQL Version': res.rows[0].version.split(' ')[1],
       'Current Timestamp': res.rows[0].now
     }]);
+    return true;
   } catch (err) {
     console.error('❌ Database connection failed:', err);
-    process.exit(1);
+    return false;
   } finally {
     if (client) client.release();
   }
@@ -868,7 +922,7 @@ const authenticate = (req, res, next) => {
   const [bearer, token] = authHeader.split(' ');
   if (bearer !== 'Bearer' || !token) return res.status(401).json({ error: 'Invalid token format' });
 
-  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+  jwt.verify(token, process.env.JWT_SECRET.trim(), (err, decoded) => {
     if (err) return res.status(403).json({ error: 'Invalid or expired token', message: err.message });
     req.user = decoded;
     next();
@@ -886,9 +940,14 @@ const isAdmin = (req, res, next) => {
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
+    user: process.env.EMAIL_USER.trim(),
+    pass: process.env.EMAIL_PASS.trim(),
   },
+});
+
+transporter.verify((error, success) => {
+  if (error) console.error('❌ Email Transporter Error:', error);
+  else console.log('✅ Email Transporter Ready');
 });
 
 // =============================================
@@ -927,46 +986,61 @@ async function findOrCreateUser(profile, provider) {
   return newUser;
 }
 
-passport.use(new FacebookStrategy({
-  clientID: process.env.FACEBOOK_CLIENT_ID,
-  clientSecret: process.env.FACEBOOK_CLIENT_SECRET,
-  callbackURL: `${process.env.SERVER_URL}/auth/facebook/callback`,
-  profileFields: ['id', 'displayName', 'emails']
-}, async (accessToken, refreshToken, profile, done) => {
-  try {
-    const user = await findOrCreateUser(profile, 'facebook');
-    done(null, user);
-  } catch (err) {
-    done(err, null);
-  }
-}));
+if (process.env.FACEBOOK_CLIENT_ID && process.env.FACEBOOK_CLIENT_SECRET && 
+    !process.env.FACEBOOK_CLIENT_ID.startsWith('your_')) {
+  passport.use(new FacebookStrategy({
+    clientID: process.env.FACEBOOK_CLIENT_ID.trim(),
+    clientSecret: process.env.FACEBOOK_CLIENT_SECRET.trim(),
+    callbackURL: `${process.env.SERVER_URL}/auth/facebook/callback`,
+    profileFields: ['id', 'displayName', 'emails']
+  }, async (accessToken, refreshToken, profile, done) => {
+    try {
+      const user = await findOrCreateUser(profile, 'facebook');
+      done(null, user);
+    } catch (err) {
+      done(err, null);
+    }
+  }));
+} else {
+  console.warn('⚠️ Facebook authentication disabled: Invalid or missing credentials');
+}
 
-passport.use(new GoogleStrategy({
-  clientID: process.env.GOOGLE_CLIENT_ID,
-  clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-  callbackURL: `${process.env.SERVER_URL}/auth/google/callback`
-}, async (accessToken, refreshToken, profile, done) => {
-  try {
-    const user = await findOrCreateUser(profile, 'google');
-    done(null, user);
-  } catch (err) {
-    done(err, null);
-  }
-}));
+if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && 
+    !process.env.GOOGLE_CLIENT_ID.startsWith('your_')) {
+  passport.use(new GoogleStrategy({
+    clientID: process.env.GOOGLE_CLIENT_ID.trim(),
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET.trim(),
+    callbackURL: `${process.env.SERVER_URL}/auth/google/callback`
+  }, async (accessToken, refreshToken, profile, done) => {
+    try {
+      const user = await findOrCreateUser(profile, 'google');
+      done(null, user);
+    } catch (err) {
+      done(err, null);
+    }
+  }));
+} else {
+  console.warn('⚠️ Google authentication disabled: Invalid or missing credentials');
+}
 
-passport.use(new TwitterStrategy({
-  consumerKey: process.env.TWITTER_CONSUMER_KEY,
-  consumerSecret: process.env.TWITTER_CONSUMER_SECRET,
-  callbackURL: `${process.env.SERVER_URL}/auth/twitter/callback`,
-  includeEmail: true
-}, async (token, tokenSecret, profile, done) => {
-  try {
-    const user = await findOrCreateUser(profile, 'twitter');
-    done(null, user);
-  } catch (err) {
-    done(err, null);
-  }
-}));
+if (process.env.TWITTER_CONSUMER_KEY && process.env.TWITTER_CONSUMER_SECRET && 
+    !process.env.TWITTER_CONSUMER_KEY.startsWith('your_')) {
+  passport.use(new TwitterStrategy({
+    consumerKey: process.env.TWITTER_CONSUMER_KEY.trim(),
+    consumerSecret: process.env.TWITTER_CONSUMER_SECRET.trim(),
+    callbackURL: `${process.env.SERVER_URL}/auth/twitter/callback`,
+    includeEmail: true
+  }, async (token, tokenSecret, profile, done) => {
+    try {
+      const user = await findOrCreateUser(profile, 'twitter');
+      done(null, user);
+    } catch (err) {
+      done(err, null);
+    }
+  }));
+} else {
+  console.warn('⚠️ Twitter authentication disabled: Invalid or missing credentials');
+}
 
 // =============================================
 // DATASET ROUTES
@@ -1062,7 +1136,7 @@ const fileFilter = (req, file, cb) => {
 
 const upload = multer({
   storage,
-  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB max
+  limits: { fileSize: 50 * 1024 * 1024 },
   fileFilter
 }).single('file');
 
@@ -1232,7 +1306,7 @@ app.post('/api/auth/login', async (req, res) => {
 
     const token = jwt.sign(
       { id: user.id, email: user.email, role: user.role },
-      process.env.JWT_SECRET,
+      process.env.JWT_SECRET.trim(),
       { expiresIn: '1d' }
     );
 
@@ -1300,7 +1374,7 @@ app.get('/auth/facebook/callback',
   (req, res) => {
     const token = jwt.sign(
       { id: req.user.id, email: req.user.email, role: req.user.role },
-      process.env.JWT_SECRET,
+      process.env.JWT_SECRET.trim(),
       { expiresIn: '1d' }
     );
     res.redirect(`${process.env.CLIENT_URL}/social-login?token=${token}`);
@@ -1314,7 +1388,7 @@ app.get('/auth/google/callback',
   (req, res) => {
     const token = jwt.sign(
       { id: req.user.id, email: req.user.email, role: req.user.role },
-      process.env.JWT_SECRET,
+      process.env.JWT_SECRET.trim(),
       { expiresIn: '1d' }
     );
     res.redirect(`${process.env.CLIENT_URL}/social-login?token=${token}`);
@@ -1328,7 +1402,7 @@ app.get('/auth/twitter/callback',
   (req, res) => {
     const token = jwt.sign(
       { id: req.user.id, email: req.user.email, role: req.user.role },
-      process.env.JWT_SECRET,
+      process.env.JWT_SECRET.trim(),
       { expiresIn: '1d' }
     );
     res.redirect(`${process.env.CLIENT_URL}/social-login?token=${token}`);
@@ -1343,9 +1417,10 @@ app.get('/api/health', async (req, res) => {
     const client = await pool.connect();
     await client.query('SELECT 1');
     client.release();
-    res.json({ status: 'ok', db: 'connected' });
+    const redisStatus = redisClient.isReady ? 'connected' : 'disconnected';
+    res.json({ status: 'ok', db: 'connected', redis: redisStatus });
   } catch (err) {
-    res.status(500).json({ status: 'error', error: err.message });
+    res.status(500).json({ status: 'error', db: 'disconnected', redis: redisClient.isReady ? 'connected' : 'disconnected', error: err.message });
   }
 });
 
@@ -1353,16 +1428,25 @@ app.get('/api/health', async (req, res) => {
 // GLOBAL ERROR HANDLER
 // =============================================
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  console.error('Global Error:', err.stack);
   if (res.headersSent) return next(err);
   res.status(500).json({ error: err.message || 'Internal Server Error' });
 });
 
 // =============================================
-// START SERVER AFTER DB TEST
+// START SERVER
 // =============================================
-testDatabaseConnection().then(() => {
+async function startServer() {
+  const dbConnected = await testDatabaseConnection();
+  if (!dbConnected) {
+    console.warn('⚠️ Starting server without database connection. Some features may not work.');
+  }
+  if (!redisClient.isReady) {
+    console.warn('⚠️ Redis not connected. Using in-memory session store. Sessions may not persist.');
+  }
   app.listen(PORT, () => {
     console.log(`🚀 Server started on port ${PORT}`);
   });
-});
+}
+
+startServer();
