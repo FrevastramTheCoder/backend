@@ -687,6 +687,689 @@
 //   });
 // });
 
+// const path = require('path');
+// require('dotenv').config({ path: path.resolve(__dirname, '.env') });
+
+// const express = require('express');
+// const cors = require('cors');
+// const session = require('express-session');
+// const RedisStore = require('connect-redis').default;
+// const { createClient } = require('redis');
+// const { Pool } = require('pg');
+// const multer = require('multer');
+// const fs = require('fs');
+// const shapefile = require('shapefile');
+// const jwt = require('jsonwebtoken');
+// const bcrypt = require('bcrypt');
+// const { promisify } = require('util');
+// const AdmZip = require('adm-zip');
+// const passport = require('passport');
+// const FacebookStrategy = require('passport-facebook').Strategy;
+// const GoogleStrategy = require('passport-google-oauth20').Strategy;
+// const TwitterStrategy = require('passport-twitter').Strategy;
+// const nodemailer = require('nodemailer');
+
+// const unlinkAsync = promisify(fs.unlink);
+// const rmdirAsync = promisify(fs.rm || fs.rmdir);
+
+// // =============================================
+// // APP INITIALIZATION
+// // =============================================
+// const app = express();
+// const PORT = process.env.PORT || 10000;
+
+// // =============================================
+// // CONFIG VALIDATION
+// // =============================================
+// const validateConfig = () => {
+//   const requiredVars = [
+//     'JWT_SECRET', 'SESSION_SECRET', 'DB_USER', 'DB_PASS', 'DB_HOST', 'DB_NAME', 'DB_PORT',
+//     'EMAIL_USER', 'EMAIL_PASS', 'CORS_ORIGIN', 'CLIENT_URL', 'SERVER_URL', 'REDIS_URL'
+//   ];
+//   const optionalVars = [
+//     'FACEBOOK_CLIENT_ID', 'FACEBOOK_CLIENT_SECRET',
+//     'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET',
+//     'TWITTER_CONSUMER_KEY', 'TWITTER_CONSUMER_SECRET'
+//   ];
+//   const missingVars = requiredVars.filter(v => !process.env[v] || process.env[v].trim() === '');
+
+//   if (missingVars.length > 0) {
+//     console.error('❌ Missing required environment variables:');
+//     console.table(missingVars.map(varName => ({
+//       Variable: varName,
+//       Status: 'MISSING',
+//       'Expected Location': path.resolve(__dirname, '.env')
+//     })));
+//     process.exit(1);
+//   }
+//   console.log('✅ Environment variables validated successfully');
+//   console.table([...requiredVars, ...optionalVars].map(varName => ({
+//     Variable: varName,
+//     Status: process.env[varName] ? 'PRESENT' : 'NOT PRESENT',
+//     Value: varName.toLowerCase().includes('secret') || varName.toLowerCase().includes('pass')
+//       ? '*****'
+//       : process.env[varName] || 'N/A'
+//   })));
+
+//   optionalVars.forEach(varName => {
+//     if (process.env[varName] && process.env[varName].startsWith('your_')) {
+//       console.warn(`⚠️ Warning: ${varName} appears to be a placeholder value: ${process.env[varName]}`);
+//     }
+//   });
+// };
+// validateConfig();
+
+// // =============================================
+// // REDIS CLIENT SETUP WITH FALLBACK MEMORY STORE
+// // =============================================
+// let sessionStore;
+// let redisErrorLogged = false;
+
+// const redisClient = createClient({
+//   url: process.env.REDIS_URL,
+//   socket: {
+//     reconnectStrategy: retries => {
+//       if (retries > 10) {
+//         if (!redisErrorLogged) {
+//           console.warn('⚠️ Redis connection failed after 10 retries, falling back to in-memory session store');
+//           redisErrorLogged = true;
+//           sessionStore = new session.MemoryStore();
+//         }
+//         return false; // stop retrying
+//       }
+//       return Math.min(retries * 100, 3000); // retry delay
+//     }
+//   }
+// });
+
+// redisClient.on('error', err => {
+//   if (redisErrorLogged) return;
+//   if (err.code === 'ENOTFOUND') {
+//     console.error(`Redis DNS Error: Cannot resolve ${process.env.REDIS_URL}. Check REDIS_URL.`);
+//   } else {
+//     console.error('Redis Client Error:', err);
+//   }
+// });
+// redisClient.on('connect', () => console.log('Redis Client Connected'));
+// redisClient.on('ready', () => {
+//   console.log('Redis Client Ready');
+//   sessionStore = new RedisStore({ client: redisClient });
+//   redisErrorLogged = false;
+// });
+// redisClient.on('end', () => {
+//   if (!redisErrorLogged) {
+//     console.log('Redis Client Disconnected');
+//     redisErrorLogged = true;
+//   }
+// });
+
+// // Start Redis connection and fallback if it fails
+// sessionStore = new session.MemoryStore();
+// redisClient.connect().catch(err => {
+//   if (!redisErrorLogged) {
+//     console.error('Redis Connection Failed:', err);
+//     redisErrorLogged = true;
+//     sessionStore = new session.MemoryStore();
+//   }
+// });
+
+// // =============================================
+// // MIDDLEWARE
+// // =============================================
+// app.use(cors({
+//   origin: process.env.CORS_ORIGIN.trim(),
+//   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+//   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+//   credentials: true
+// }));
+
+// app.use(session({
+//   store: sessionStore,
+//   secret: process.env.SESSION_SECRET.trim(),
+//   resave: false,
+//   saveUninitialized: false,
+//   cookie: {
+//     secure: process.env.NODE_ENV === 'production',
+//     maxAge: 24 * 60 * 60 * 1000,
+//     sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax'
+//   }
+// }));
+
+// app.use(express.json({
+//   limit: '50mb',
+//   verify: (req, res, buf) => { req.rawBody = buf.toString(); }
+// }));
+// app.use(express.urlencoded({ extended: true, limit: '50mb', parameterLimit: 1000 }));
+
+// app.use(passport.initialize());
+// app.use(passport.session());
+
+// // =============================================
+// // ROOT ROUTE
+// // =============================================
+// app.get('/', (req, res) => {
+//   res.json({
+//     message: 'Welcome to the ARU-SDMS Backend API',
+//     status: 'running',
+//     version: '1.0.0',
+//     endpoints: {
+//       health: '/api/health',
+//       auth: {
+//         register: '/api/auth/register',
+//         login: '/api/auth/login',
+//         google: '/auth/google',
+//         facebook: '/auth/facebook',
+//         twitter: '/auth/twitter'
+//       },
+//       datasets: '/api/:dataset (requires authentication)'
+//     }
+//   });
+// });
+
+// // =============================================
+// // DATABASE CONNECTION
+// // =============================================
+// const pool = new Pool({
+//   user: process.env.DB_USER.trim(),
+//   host: process.env.DB_HOST.trim(),
+//   database: process.env.DB_NAME.trim(),
+//   password: process.env.DB_PASS.trim(),
+//   port: Number(process.env.DB_PORT),
+//   ssl: { rejectUnauthorized: false },
+//   connectionTimeoutMillis: 10000,
+//   idleTimeoutMillis: 30000,
+//   max: 20,
+//   allowExitOnIdle: true
+// });
+
+// pool.on('error', (err) => console.error('PostgreSQL Pool Error:', err));
+
+// const testDatabaseConnection = async () => {
+//   const start = Date.now();
+//   let client;
+//   try {
+//     client = await pool.connect();
+//     const res = await client.query('SELECT NOW(), version()');
+//     const duration = Date.now() - start;
+//     console.log('✅ Database connection established:');
+//     console.table([{
+//       'Connection Time': `${duration}ms`,
+//       'PostgreSQL Version': res.rows[0].version.split(' ')[1],
+//       'Current Timestamp': res.rows[0].now
+//     }]);
+//     return true;
+//   } catch (err) {
+//     console.error('❌ Database connection failed:', err);
+//     return false;
+//   } finally {
+//     if (client) client.release();
+//   }
+// };
+
+// // =============================================
+// // AUTH MIDDLEWARE
+// // =============================================
+// const authenticate = (req, res, next) => {
+//   const authHeader = req.headers.authorization;
+//   if (!authHeader) return res.status(401).json({ error: 'Authentication required' });
+
+//   const [bearer, token] = authHeader.split(' ');
+//   if (bearer !== 'Bearer' || !token) return res.status(401).json({ error: 'Invalid token format' });
+
+//   jwt.verify(token, process.env.JWT_SECRET.trim(), (err, decoded) => {
+//     if (err) return res.status(403).json({ error: 'Invalid or expired token', message: err.message });
+//     req.user = decoded;
+//     next();
+//   });
+// };
+
+// const isAdmin = (req, res, next) => {
+//   if (req.user?.role !== 'admin') return res.status(403).json({ error: 'Admin privileges required' });
+//   next();
+// };
+
+// // =============================================
+// // EMAIL TRANSPORTER (Nodemailer)
+// // =============================================
+// const transporter = nodemailer.createTransport({
+//   service: 'gmail',
+//   auth: {
+//     user: process.env.EMAIL_USER.trim(),
+//     pass: process.env.EMAIL_PASS.trim(),
+//   },
+// });
+
+// transporter.verify((error, success) => {
+//   if (error) console.error('❌ Email Transporter Error:', error);
+//   else console.log('✅ Email Transporter Ready');
+// });
+
+// // =============================================
+// // OTP GENERATOR HELPER
+// // =============================================
+// const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString();
+
+// // =============================================
+// // PASSPORT SOCIAL STRATEGIES SETUP
+// // =============================================
+// passport.serializeUser((user, done) => done(null, user.id));
+
+// passport.deserializeUser(async (id, done) => {
+//   try {
+//     const res = await pool.query('SELECT * FROM users WHERE id = $1', [id]);
+//     if (res.rows.length === 0) return done(null, false);
+//     done(null, res.rows[0]);
+//   } catch (err) {
+//     done(err, null);
+//   }
+// });
+
+// async function findOrCreateUser(profile, provider) {
+//   const email = profile.emails?.[0]?.value;
+//   if (!email) throw new Error('Email not found in social profile');
+
+//   const { rows } = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+//   if (rows.length > 0) return rows[0];
+
+//   const name = profile.displayName || profile.username || 'No Name';
+//   const { rows: [newUser] } = await pool.query(
+//     `INSERT INTO users (name, email, is_verified, role, provider) 
+//      VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+//     [name, email, true, 'user', provider]
+//   );
+//   return newUser;
+// }
+
+// if (process.env.FACEBOOK_CLIENT_ID && process.env.FACEBOOK_CLIENT_SECRET && 
+//     !process.env.FACEBOOK_CLIENT_ID.startsWith('your_')) {
+//   passport.use(new FacebookStrategy({
+//     clientID: process.env.FACEBOOK_CLIENT_ID.trim(),
+//     clientSecret: process.env.FACEBOOK_CLIENT_SECRET.trim(),
+//     callbackURL: `${process.env.SERVER_URL}/auth/facebook/callback`,
+//     profileFields: ['id', 'displayName', 'emails']
+//   }, async (accessToken, refreshToken, profile, done) => {
+//     try {
+//       const user = await findOrCreateUser(profile, 'facebook');
+//       done(null, user);
+//     } catch (err) {
+//       done(err, null);
+//     }
+//   }));
+// } else {
+//   console.warn('⚠️ Facebook authentication disabled: Invalid or missing credentials');
+// }
+
+// if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && 
+//     !process.env.GOOGLE_CLIENT_ID.startsWith('your_')) {
+//   passport.use(new GoogleStrategy({
+//     clientID: process.env.GOOGLE_CLIENT_ID.trim(),
+//     clientSecret: process.env.GOOGLE_CLIENT_SECRET.trim(),
+//     callbackURL: `${process.env.SERVER_URL}/auth/google/callback`
+//   }, async (accessToken, refreshToken, profile, done) => {
+//     try {
+//       const user = await findOrCreateUser(profile, 'google');
+//       done(null, user);
+//     } catch (err) {
+//       done(err, null);
+//     }
+//   }));
+// } else {
+//   console.warn('⚠️ Google authentication disabled: Invalid or missing credentials');
+// }
+
+// if (process.env.TWITTER_CONSUMER_KEY && process.env.TWITTER_CONSUMER_SECRET && 
+//     !process.env.TWITTER_CONSUMER_KEY.startsWith('your_')) {
+//   passport.use(new TwitterStrategy({
+//     consumerKey: process.env.TWITTER_CONSUMER_KEY.trim(),
+//     consumerSecret: process.env.TWITTER_CONSUMER_SECRET.trim(),
+//     callbackURL: `${process.env.SERVER_URL}/auth/twitter/callback`,
+//     includeEmail: true
+//   }, async (token, tokenSecret, profile, done) => {
+//     try {
+//       const user = await findOrCreateUser(profile, 'twitter');
+//       done(null, user);
+//     } catch (err) {
+//       done(err, null);
+//     }
+//   }));
+// } else {
+//   console.warn('⚠️ Twitter authentication disabled: Invalid or missing credentials');
+// }
+
+// // =============================================
+// // DATASET ROUTES
+// // =============================================
+// const VALID_DATASETS = [
+//   "buildings", "footpaths", "electricitySupply", "securityLights", "roads",
+//   "drainage-systems", "recreationalAreas", "vimbweta", "solidWasteCollection",
+//   "parking", "vegetation"
+// ];
+
+// const validateDataset = (req, res, next) => {
+//   const dataset = req.params.dataset;
+//   if (!VALID_DATASETS.includes(dataset)) {
+//     return res.status(400).json({ error: `Invalid dataset: ${dataset}` });
+//   }
+//   next();
+// };
+
+// app.get('/api/:dataset', authenticate, validateDataset, async (req, res, next) => {
+//   try {
+//     const { dataset } = req.params;
+//     const result = await pool.query(`SELECT id, properties FROM ${dataset} ORDER BY id ASC`);
+//     res.json({ features: result.rows });
+//   } catch (err) {
+//     next(err);
+//   }
+// });
+
+// app.post('/api/:dataset', authenticate, validateDataset, async (req, res, next) => {
+//   try {
+//     const { dataset } = req.params;
+//     const properties = req.body;
+//     const result = await pool.query(
+//       `INSERT INTO ${dataset} (properties) VALUES ($1) RETURNING id, properties`,
+//       [properties]
+//     );
+//     res.status(201).json({ message: 'Item uploaded!', record: result.rows[0] });
+//   } catch (err) {
+//     next(err);
+//   }
+// });
+
+// app.put('/api/:dataset/:id', authenticate, validateDataset, async (req, res, next) => {
+//   try {
+//     const { dataset, id } = req.params;
+//     const properties = req.body;
+//     const result = await pool.query(
+//       `UPDATE ${dataset} SET properties = $1 WHERE id = $2 RETURNING id, properties`,
+//       [properties, id]
+//     );
+//     if (result.rowCount === 0) return res.status(404).json({ error: 'Record not found' });
+//     res.json({ message: 'Updated!', record: result.rows[0] });
+//   } catch (err) {
+//     next(err);
+//   }
+// });
+
+// app.delete('/api/:dataset/:id', authenticate, validateDataset, async (req, res, next) => {
+//   try {
+//     const { dataset, id } = req.params;
+//     const result = await pool.query(`DELETE FROM ${dataset} WHERE id = $1`, [id]);
+//     if (result.rowCount === 0) return res.status(404).json({ error: 'Record not found' });
+//     res.json({ message: 'Deleted!' });
+//   } catch (err) {
+//     next(err);
+//   }
+// });
+
+// // =============================================
+// // MULTER CONFIGURATION FOR SHAPEFILE UPLOAD
+// // =============================================
+// const storage = multer.diskStorage({
+//   destination: (req, file, cb) => {
+//     const uploadDir = path.resolve(__dirname, 'Uploads/shapefiles');
+//     if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+//     cb(null, uploadDir);
+//   },
+//   filename: (req, file, cb) => {
+//     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+//     cb(null, uniqueSuffix + '-' + file.originalname);
+//   }
+// });
+
+// const fileFilter = (req, file, cb) => {
+//   if (file.mimetype === 'application/zip' || file.originalname.match(/\.zip$/i)) {
+//     cb(null, true);
+//   } else {
+//     const err = new Error('Only .zip files are allowed!');
+//     err.code = 'LIMIT_FILE_TYPES';
+//     cb(err, false);
+//   }
+// };
+
+// const upload = multer({
+//   storage,
+//   fileFilter,
+//   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+// }).single('shapefile');
+
+// // =============================================
+// // SHAPEFILE UPLOAD ROUTE
+// // =============================================
+// app.post('/api/shapefile/upload', authenticate, (req, res) => {
+//   upload(req, res, async function (err) {
+//     if (err) {
+//       if (err.code === 'LIMIT_FILE_TYPES') {
+//         return res.status(422).json({ error: err.message });
+//       }
+//       if (err.code === 'LIMIT_FILE_SIZE') {
+//         return res.status(422).json({ error: 'File too large. Max 10MB allowed.' });
+//       }
+//       return res.status(500).json({ error: err.message });
+//     }
+//     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+//     const zipPath = req.file.path;
+//     const unzipDir = path.join(path.dirname(zipPath), path.basename(zipPath, '.zip'));
+
+//     try {
+//       const zip = new AdmZip(zipPath);
+//       zip.extractAllTo(unzipDir, true);
+
+//       // Find .shp file inside extracted folder
+//       const files = fs.readdirSync(unzipDir);
+//       const shpFile = files.find(f => f.toLowerCase().endsWith('.shp'));
+//       if (!shpFile) throw new Error('No .shp file found in the ZIP');
+
+//       // Read shapefile
+//       const shpFilePath = path.join(unzipDir, shpFile);
+//       const geojson = { type: 'FeatureCollection', features: [] };
+
+//       const source = await shapefile.open(shpFilePath);
+//       while (true) {
+//         const result = await source.read();
+//         if (result.done) break;
+//         geojson.features.push({ type: 'Feature', geometry: result.value.geometry, properties: result.value.properties });
+//       }
+
+//       // Cleanup files after reading
+//       await unlinkAsync(zipPath);
+//       await rmdirAsync(unzipDir, { recursive: true, force: true });
+
+//       res.json({ message: 'Shapefile uploaded and processed', data: geojson });
+//     } catch (error) {
+//       // Cleanup files on error too
+//       try {
+//         await unlinkAsync(zipPath);
+//         await rmdirAsync(unzipDir, { recursive: true, force: true });
+//       } catch (cleanupErr) {
+//         console.error('Error cleaning up after shapefile error:', cleanupErr);
+//       }
+//       res.status(500).json({ error: error.message });
+//     }
+//   });
+// });
+
+// // =============================================
+// // AUTH ROUTES
+// // =============================================
+
+// // Register
+// app.post('/api/auth/register', async (req, res, next) => {
+//   try {
+//     const { name, email, password } = req.body;
+//     if (!name || !email || !password) return res.status(400).json({ error: 'Name, email, and password required' });
+
+//     const emailLower = email.toLowerCase();
+//     const userExists = await pool.query('SELECT id FROM users WHERE email = $1', [emailLower]);
+//     if (userExists.rowCount > 0) return res.status(409).json({ error: 'User already exists' });
+
+//     const hashedPassword = await bcrypt.hash(password, 12);
+//     const otp = generateOTP();
+
+//     const { rows } = await pool.query(
+//       `INSERT INTO users (name, email, password, is_verified, otp, role) 
+//        VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, email, is_verified`,
+//       [name, emailLower, hashedPassword, false, otp, 'user']
+//     );
+
+//     // Send OTP email
+//     await transporter.sendMail({
+//       from: `"ARU-SDMS" <${process.env.EMAIL_USER.trim()}>`,
+//       to: emailLower,
+//       subject: 'Verify your account OTP',
+//       text: `Your OTP code is: ${otp}. It will expire shortly.`,
+//       html: `<p>Your OTP code is: <b>${otp}</b>. It will expire shortly.</p>`
+//     });
+
+//     res.status(201).json({ message: 'User registered. Please verify your email.', user: { id: rows[0].id, name: rows[0].name, email: rows[0].email } });
+//   } catch (err) {
+//     next(err);
+//   }
+// });
+
+// // Verify OTP
+// app.post('/api/auth/verify', async (req, res, next) => {
+//   try {
+//     const { email, otp } = req.body;
+//     if (!email || !otp) return res.status(400).json({ error: 'Email and OTP required' });
+
+//     const emailLower = email.toLowerCase();
+//     const { rows } = await pool.query('SELECT id, otp, is_verified FROM users WHERE email = $1', [emailLower]);
+//     if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
+
+//     const user = rows[0];
+//     if (user.is_verified) return res.status(400).json({ error: 'User already verified' });
+
+//     if (user.otp !== otp) return res.status(400).json({ error: 'Invalid OTP' });
+
+//     await pool.query('UPDATE users SET is_verified = true, otp = NULL WHERE id = $1', [user.id]);
+
+//     res.json({ message: 'Email verified successfully. You can now login.' });
+//   } catch (err) {
+//     next(err);
+//   }
+// });
+
+// // Login
+// app.post('/api/auth/login', async (req, res, next) => {
+//   try {
+//     const { email, password } = req.body;
+//     if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
+
+//     const emailLower = email.toLowerCase();
+//     const { rows } = await pool.query('SELECT * FROM users WHERE email = $1', [emailLower]);
+//     if (rows.length === 0) return res.status(401).json({ error: 'Invalid email or password' });
+
+//     const user = rows[0];
+//     if (!user.is_verified) return res.status(401).json({ error: 'Email not verified' });
+
+//     const passwordMatch = await bcrypt.compare(password, user.password);
+//     if (!passwordMatch) return res.status(401).json({ error: 'Invalid email or password' });
+
+//     const tokenPayload = { id: user.id, email: user.email, role: user.role };
+//     const token = jwt.sign(tokenPayload, process.env.JWT_SECRET.trim(), { expiresIn: '7d' });
+
+//     res.json({ message: 'Login successful', token, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
+//   } catch (err) {
+//     next(err);
+//   }
+// });
+
+// // Logout (optional, if using sessions)
+// app.post('/api/auth/logout', (req, res) => {
+//   req.logout(() => {
+//     req.session.destroy(err => {
+//       if (err) return res.status(500).json({ error: 'Logout failed' });
+//       res.clearCookie('connect.sid');
+//       res.json({ message: 'Logged out successfully' });
+//     });
+//   });
+// });
+
+// // =============================================
+// // SOCIAL AUTH ROUTES
+// // =============================================
+// if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+//   app.get('/auth/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
+
+//   app.get('/auth/google/callback',
+//     passport.authenticate('google', { failureRedirect: `${process.env.CLIENT_URL}/login` }),
+//     (req, res) => {
+//       // Generate JWT after successful login
+//       const tokenPayload = { id: req.user.id, email: req.user.email, role: req.user.role };
+//       const token = jwt.sign(tokenPayload, process.env.JWT_SECRET.trim(), { expiresIn: '7d' });
+//       res.redirect(`${process.env.CLIENT_URL}/social-login?token=${token}`);
+//     }
+//   );
+// }
+
+// if (process.env.FACEBOOK_CLIENT_ID && process.env.FACEBOOK_CLIENT_SECRET) {
+//   app.get('/auth/facebook', passport.authenticate('facebook', { scope: ['email'] }));
+
+//   app.get('/auth/facebook/callback',
+//     passport.authenticate('facebook', { failureRedirect: `${process.env.CLIENT_URL}/login` }),
+//     (req, res) => {
+//       const tokenPayload = { id: req.user.id, email: req.user.email, role: req.user.role };
+//       const token = jwt.sign(tokenPayload, process.env.JWT_SECRET.trim(), { expiresIn: '7d' });
+//       res.redirect(`${process.env.CLIENT_URL}/social-login?token=${token}`);
+//     }
+//   );
+// }
+
+// if (process.env.TWITTER_CONSUMER_KEY && process.env.TWITTER_CONSUMER_SECRET) {
+//   app.get('/auth/twitter', passport.authenticate('twitter'));
+
+//   app.get('/auth/twitter/callback',
+//     passport.authenticate('twitter', { failureRedirect: `${process.env.CLIENT_URL}/login` }),
+//     (req, res) => {
+//       const tokenPayload = { id: req.user.id, email: req.user.email, role: req.user.role };
+//       const token = jwt.sign(tokenPayload, process.env.JWT_SECRET.trim(), { expiresIn: '7d' });
+//       res.redirect(`${process.env.CLIENT_URL}/social-login?token=${token}`);
+//     }
+//   );
+// }
+
+// // =============================================
+// // HEALTH CHECK ROUTE
+// // =============================================
+// app.get('/api/health', async (req, res) => {
+//   const dbConnected = await testDatabaseConnection();
+//   const redisConnected = redisClient.isReady;
+
+//   res.json({
+//     status: 'ok',
+//     database: dbConnected ? 'connected' : 'disconnected',
+//     redis: redisConnected ? 'connected' : 'disconnected',
+//     serverTime: new Date()
+//   });
+// });
+
+// // =============================================
+// // GLOBAL ERROR HANDLER
+// // =============================================
+// app.use((err, req, res, next) => {
+//   console.error('Server Error:', err);
+//   const status = err.status || 500;
+//   res.status(status).json({ error: err.message || 'Internal Server Error' });
+// });
+
+// // =============================================
+// // START SERVER
+// // =============================================
+// (async () => {
+//   await testDatabaseConnection();
+
+//   if (!redisClient.isReady) {
+//     console.warn('⚠️ Redis not connected. Using in-memory session store. Sessions will not persist.');
+//   }
+
+//   app.listen(PORT, () => {
+//     console.log(`🚀 Server running on port ${PORT}`);
+//   });
+// })();
+
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '.env') });
 
@@ -704,90 +1387,50 @@ const bcrypt = require('bcrypt');
 const { promisify } = require('util');
 const AdmZip = require('adm-zip');
 const passport = require('passport');
-const FacebookStrategy = require('passport-facebook').Strategy;
-const GoogleStrategy = require('passport-google-oauth20').Strategy;
-const TwitterStrategy = require('passport-twitter').Strategy;
+const GoogleStrategy = require('passport-google-oauth20').Strategy; // Other strategies optional
 const nodemailer = require('nodemailer');
 
 const unlinkAsync = promisify(fs.unlink);
 const rmdirAsync = promisify(fs.rm || fs.rmdir);
 
-// =============================================
-// APP INITIALIZATION
-// =============================================
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// =============================================
-// CONFIG VALIDATION
-// =============================================
+// Configuration Validation
 const validateConfig = () => {
   const requiredVars = [
     'JWT_SECRET', 'SESSION_SECRET', 'DB_USER', 'DB_PASS', 'DB_HOST', 'DB_NAME', 'DB_PORT',
     'EMAIL_USER', 'EMAIL_PASS', 'CORS_ORIGIN', 'CLIENT_URL', 'SERVER_URL', 'REDIS_URL'
   ];
   const optionalVars = [
-    'FACEBOOK_CLIENT_ID', 'FACEBOOK_CLIENT_SECRET',
-    'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET',
-    'TWITTER_CONSUMER_KEY', 'TWITTER_CONSUMER_SECRET'
+    'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'
   ];
   const missingVars = requiredVars.filter(v => !process.env[v] || process.env[v].trim() === '');
 
   if (missingVars.length > 0) {
-    console.error('❌ Missing required environment variables:');
-    console.table(missingVars.map(varName => ({
-      Variable: varName,
-      Status: 'MISSING',
-      'Expected Location': path.resolve(__dirname, '.env')
-    })));
+    console.error('❌ Missing required environment variables:', missingVars);
     process.exit(1);
   }
   console.log('✅ Environment variables validated successfully');
-  console.table([...requiredVars, ...optionalVars].map(varName => ({
-    Variable: varName,
-    Status: process.env[varName] ? 'PRESENT' : 'NOT PRESENT',
-    Value: varName.toLowerCase().includes('secret') || varName.toLowerCase().includes('pass')
-      ? '*****'
-      : process.env[varName] || 'N/A'
-  })));
-
-  optionalVars.forEach(varName => {
-    if (process.env[varName] && process.env[varName].startsWith('your_')) {
-      console.warn(`⚠️ Warning: ${varName} appears to be a placeholder value: ${process.env[varName]}`);
-    }
-  });
 };
 validateConfig();
 
-// =============================================
-// REDIS CLIENT SETUP WITH FALLBACK MEMORY STORE
-// =============================================
+// Redis Client Setup
 let sessionStore;
 let redisErrorLogged = false;
 
 const redisClient = createClient({
   url: process.env.REDIS_URL,
   socket: {
-    reconnectStrategy: retries => {
-      if (retries > 10) {
-        if (!redisErrorLogged) {
-          console.warn('⚠️ Redis connection failed after 10 retries, falling back to in-memory session store');
-          redisErrorLogged = true;
-          sessionStore = new session.MemoryStore();
-        }
-        return false; // stop retrying
-      }
-      return Math.min(retries * 100, 3000); // retry delay
-    }
+    reconnectStrategy: retries => (retries > 10 ? false : Math.min(retries * 100, 3000))
   }
 });
 
 redisClient.on('error', err => {
-  if (redisErrorLogged) return;
-  if (err.code === 'ENOTFOUND') {
-    console.error(`Redis DNS Error: Cannot resolve ${process.env.REDIS_URL}. Check REDIS_URL.`);
-  } else {
-    console.error('Redis Client Error:', err);
+  if (!redisErrorLogged) {
+    console.error('Redis Client Error:', err.message);
+    redisErrorLogged = true;
+    sessionStore = new session.MemoryStore();
   }
 });
 redisClient.on('connect', () => console.log('Redis Client Connected'));
@@ -796,30 +1439,21 @@ redisClient.on('ready', () => {
   sessionStore = new RedisStore({ client: redisClient });
   redisErrorLogged = false;
 });
-redisClient.on('end', () => {
-  if (!redisErrorLogged) {
-    console.log('Redis Client Disconnected');
-    redisErrorLogged = true;
-  }
-});
 
-// Start Redis connection and fallback if it fails
-sessionStore = new session.MemoryStore();
-redisClient.connect().catch(err => {
-  if (!redisErrorLogged) {
-    console.error('Redis Connection Failed:', err);
-    redisErrorLogged = true;
+(async () => {
+  try {
+    await redisClient.connect();
+  } catch (err) {
+    console.error('Redis Connection Failed:', err.message);
     sessionStore = new session.MemoryStore();
   }
-});
+})();
 
-// =============================================
-// MIDDLEWARE
-// =============================================
+// Middleware
 app.use(cors({
   origin: process.env.CORS_ORIGIN.trim(),
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
 }));
 
@@ -828,87 +1462,51 @@ app.use(session({
   secret: process.env.SESSION_SECRET.trim(),
   resave: false,
   saveUninitialized: false,
-  cookie: {
-    secure: process.env.NODE_ENV === 'production',
-    maxAge: 24 * 60 * 60 * 1000,
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax'
-  }
+  cookie: { secure: process.env.NODE_ENV === 'production', maxAge: 24 * 60 * 60 * 1000, sameSite: 'lax' }
 }));
 
-app.use(express.json({
-  limit: '50mb',
-  verify: (req, res, buf) => { req.rawBody = buf.toString(); }
-}));
+app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb', parameterLimit: 1000 }));
-
 app.use(passport.initialize());
 app.use(passport.session());
 
-// =============================================
-// ROOT ROUTE
-// =============================================
+// Root Route
 app.get('/', (req, res) => {
   res.json({
     message: 'Welcome to the ARU-SDMS Backend API',
     status: 'running',
     version: '1.0.0',
-    endpoints: {
-      health: '/api/health',
-      auth: {
-        register: '/api/auth/register',
-        login: '/api/auth/login',
-        google: '/auth/google',
-        facebook: '/auth/facebook',
-        twitter: '/auth/twitter'
-      },
-      datasets: '/api/:dataset (requires authentication)'
-    }
+    endpoints: { health: '/api/health', auth: '/api/auth', datasets: '/api/:dataset' }
   });
 });
 
-// =============================================
-// DATABASE CONNECTION
-// =============================================
+// Database Connection
 const pool = new Pool({
   user: process.env.DB_USER.trim(),
   host: process.env.DB_HOST.trim(),
   database: process.env.DB_NAME.trim(),
   password: process.env.DB_PASS.trim(),
   port: Number(process.env.DB_PORT),
-  ssl: { rejectUnauthorized: false },
-  connectionTimeoutMillis: 10000,
-  idleTimeoutMillis: 30000,
-  max: 20,
-  allowExitOnIdle: true
+  ssl: { rejectUnauthorized: false }
 });
 
-pool.on('error', (err) => console.error('PostgreSQL Pool Error:', err));
+pool.on('error', (err, client) => console.error('PostgreSQL Pool Error:', err.message));
 
 const testDatabaseConnection = async () => {
-  const start = Date.now();
-  let client;
+  const client = await pool.connect();
   try {
-    client = await pool.connect();
     const res = await client.query('SELECT NOW(), version()');
-    const duration = Date.now() - start;
-    console.log('✅ Database connection established:');
-    console.table([{
-      'Connection Time': `${duration}ms`,
-      'PostgreSQL Version': res.rows[0].version.split(' ')[1],
-      'Current Timestamp': res.rows[0].now
-    }]);
+    console.log('✅ Database connected:', res.rows[0].version);
     return true;
   } catch (err) {
-    console.error('❌ Database connection failed:', err);
+    console.error('❌ Database connection failed:', err.message);
     return false;
   } finally {
-    if (client) client.release();
+    client.release();
   }
 };
 
-// =============================================
-// AUTH MIDDLEWARE
-// =============================================
+// Auth Middleware
 const authenticate = (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader) return res.status(401).json({ error: 'Authentication required' });
@@ -917,7 +1515,7 @@ const authenticate = (req, res, next) => {
   if (bearer !== 'Bearer' || !token) return res.status(401).json({ error: 'Invalid token format' });
 
   jwt.verify(token, process.env.JWT_SECRET.trim(), (err, decoded) => {
-    if (err) return res.status(403).json({ error: 'Invalid or expired token', message: err.message });
+    if (err) return res.status(403).json({ error: 'Invalid or expired token', details: err.message });
     req.user = decoded;
     next();
   });
@@ -928,37 +1526,22 @@ const isAdmin = (req, res, next) => {
   next();
 };
 
-// =============================================
-// EMAIL TRANSPORTER (Nodemailer)
-// =============================================
+// Email Transporter
 const transporter = nodemailer.createTransport({
   service: 'gmail',
-  auth: {
-    user: process.env.EMAIL_USER.trim(),
-    pass: process.env.EMAIL_PASS.trim(),
-  },
+  auth: { user: process.env.EMAIL_USER.trim(), pass: process.env.EMAIL_PASS.trim() },
 });
+transporter.verify((error) => error && console.error('❌ Email Transporter Error:', error));
 
-transporter.verify((error, success) => {
-  if (error) console.error('❌ Email Transporter Error:', error);
-  else console.log('✅ Email Transporter Ready');
-});
-
-// =============================================
-// OTP GENERATOR HELPER
-// =============================================
+// OTP Generator
 const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString();
 
-// =============================================
-// PASSPORT SOCIAL STRATEGIES SETUP
-// =============================================
+// Passport Setup
 passport.serializeUser((user, done) => done(null, user.id));
-
 passport.deserializeUser(async (id, done) => {
   try {
     const res = await pool.query('SELECT * FROM users WHERE id = $1', [id]);
-    if (res.rows.length === 0) return done(null, false);
-    done(null, res.rows[0]);
+    done(null, res.rows[0] || false);
   } catch (err) {
     done(err, null);
   }
@@ -966,41 +1549,20 @@ passport.deserializeUser(async (id, done) => {
 
 async function findOrCreateUser(profile, provider) {
   const email = profile.emails?.[0]?.value;
-  if (!email) throw new Error('Email not found in social profile');
+  if (!email) throw new Error('No email in social profile');
 
   const { rows } = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
   if (rows.length > 0) return rows[0];
 
   const name = profile.displayName || profile.username || 'No Name';
-  const { rows: [newUser] } = await pool.query(
-    `INSERT INTO users (name, email, is_verified, role, provider) 
-     VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+  const [newUser] = await pool.query(
+    `INSERT INTO users (name, email, is_verified, role, provider) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
     [name, email, true, 'user', provider]
-  );
+  ).rows;
   return newUser;
 }
 
-if (process.env.FACEBOOK_CLIENT_ID && process.env.FACEBOOK_CLIENT_SECRET && 
-    !process.env.FACEBOOK_CLIENT_ID.startsWith('your_')) {
-  passport.use(new FacebookStrategy({
-    clientID: process.env.FACEBOOK_CLIENT_ID.trim(),
-    clientSecret: process.env.FACEBOOK_CLIENT_SECRET.trim(),
-    callbackURL: `${process.env.SERVER_URL}/auth/facebook/callback`,
-    profileFields: ['id', 'displayName', 'emails']
-  }, async (accessToken, refreshToken, profile, done) => {
-    try {
-      const user = await findOrCreateUser(profile, 'facebook');
-      done(null, user);
-    } catch (err) {
-      done(err, null);
-    }
-  }));
-} else {
-  console.warn('⚠️ Facebook authentication disabled: Invalid or missing credentials');
-}
-
-if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && 
-    !process.env.GOOGLE_CLIENT_ID.startsWith('your_')) {
+if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && !process.env.GOOGLE_CLIENT_ID.startsWith('your_')) {
   passport.use(new GoogleStrategy({
     clientID: process.env.GOOGLE_CLIENT_ID.trim(),
     clientSecret: process.env.GOOGLE_CLIENT_SECRET.trim(),
@@ -1013,43 +1575,17 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET &&
       done(err, null);
     }
   }));
-} else {
-  console.warn('⚠️ Google authentication disabled: Invalid or missing credentials');
 }
 
-if (process.env.TWITTER_CONSUMER_KEY && process.env.TWITTER_CONSUMER_SECRET && 
-    !process.env.TWITTER_CONSUMER_KEY.startsWith('your_')) {
-  passport.use(new TwitterStrategy({
-    consumerKey: process.env.TWITTER_CONSUMER_KEY.trim(),
-    consumerSecret: process.env.TWITTER_CONSUMER_SECRET.trim(),
-    callbackURL: `${process.env.SERVER_URL}/auth/twitter/callback`,
-    includeEmail: true
-  }, async (token, tokenSecret, profile, done) => {
-    try {
-      const user = await findOrCreateUser(profile, 'twitter');
-      done(null, user);
-    } catch (err) {
-      done(err, null);
-    }
-  }));
-} else {
-  console.warn('⚠️ Twitter authentication disabled: Invalid or missing credentials');
-}
-
-// =============================================
-// DATASET ROUTES
-// =============================================
 const VALID_DATASETS = [
-  "buildings", "footpaths", "electricitySupply", "securityLights", "roads",
-  "drainage-systems", "recreationalAreas", "vimbweta", "solidWasteCollection",
-  "parking", "vegetation"
+  'buildings', 'footpaths', 'electricitySupply', 'securityLights', 'roads',
+  'drainageSystems', 'recreationalAreas', 'vimbweta', 'solidWasteCollection',
+  'parking', 'vegetation'
 ];
 
 const validateDataset = (req, res, next) => {
   const dataset = req.params.dataset;
-  if (!VALID_DATASETS.includes(dataset)) {
-    return res.status(400).json({ error: `Invalid dataset: ${dataset}` });
-  }
+  if (!VALID_DATASETS.includes(dataset)) return res.status(400).json({ error: `Invalid dataset: ${dataset}` });
   next();
 };
 
@@ -1067,10 +1603,7 @@ app.post('/api/:dataset', authenticate, validateDataset, async (req, res, next) 
   try {
     const { dataset } = req.params;
     const properties = req.body;
-    const result = await pool.query(
-      `INSERT INTO ${dataset} (properties) VALUES ($1) RETURNING id, properties`,
-      [properties]
-    );
+    const result = await pool.query(`INSERT INTO ${dataset} (properties) VALUES ($1) RETURNING id, properties`, [properties]);
     res.status(201).json({ message: 'Item uploaded!', record: result.rows[0] });
   } catch (err) {
     next(err);
@@ -1081,10 +1614,7 @@ app.put('/api/:dataset/:id', authenticate, validateDataset, async (req, res, nex
   try {
     const { dataset, id } = req.params;
     const properties = req.body;
-    const result = await pool.query(
-      `UPDATE ${dataset} SET properties = $1 WHERE id = $2 RETURNING id, properties`,
-      [properties, id]
-    );
+    const result = await pool.query(`UPDATE ${dataset} SET properties = $1 WHERE id = $2 RETURNING id, properties`, [properties, id]);
     if (result.rowCount === 0) return res.status(404).json({ error: 'Record not found' });
     res.json({ message: 'Updated!', record: result.rows[0] });
   } catch (err) {
@@ -1103,50 +1633,32 @@ app.delete('/api/:dataset/:id', authenticate, validateDataset, async (req, res, 
   }
 });
 
-// =============================================
-// MULTER CONFIGURATION FOR SHAPEFILE UPLOAD
-// =============================================
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const uploadDir = path.resolve(__dirname, 'Uploads/shapefiles');
+    const uploadDir = path.join(__dirname, 'Uploads', 'shapefiles');
     if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
     cb(null, uploadDir);
   },
   filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    cb(null, uniqueSuffix + '-' + file.originalname);
+    const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+    cb(null, `${uniqueSuffix}-${file.originalname}`);
   }
 });
 
 const fileFilter = (req, file, cb) => {
-  if (file.mimetype === 'application/zip' || file.originalname.match(/\.zip$/i)) {
+  if (file.mimetype === 'application/zip' || file.originalname.match(/\.(zip)$/i)) {
     cb(null, true);
   } else {
-    const err = new Error('Only .zip files are allowed!');
-    err.code = 'LIMIT_FILE_TYPES';
-    cb(err, false);
+    cb(new Error('Only .zip files are allowed!'), false);
   }
 };
 
-const upload = multer({
-  storage,
-  fileFilter,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
-}).single('shapefile');
+const upload = multer({ storage, fileFilter, limits: { fileSize: 10 * 1024 * 1024 } }).single('shapefile');
 
-// =============================================
-// SHAPEFILE UPLOAD ROUTE
-// =============================================
 app.post('/api/shapefile/upload', authenticate, (req, res) => {
-  upload(req, res, async function (err) {
+  upload(req, res, async (err) => {
     if (err) {
-      if (err.code === 'LIMIT_FILE_TYPES') {
-        return res.status(422).json({ error: err.message });
-      }
-      if (err.code === 'LIMIT_FILE_SIZE') {
-        return res.status(422).json({ error: 'File too large. Max 10MB allowed.' });
-      }
-      return res.status(500).json({ error: err.message });
+      return res.status(err.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ error: err.message });
     }
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
@@ -1157,215 +1669,136 @@ app.post('/api/shapefile/upload', authenticate, (req, res) => {
       const zip = new AdmZip(zipPath);
       zip.extractAllTo(unzipDir, true);
 
-      // Find .shp file inside extracted folder
       const files = fs.readdirSync(unzipDir);
       const shpFile = files.find(f => f.toLowerCase().endsWith('.shp'));
       if (!shpFile) throw new Error('No .shp file found in the ZIP');
 
-      // Read shapefile
       const shpFilePath = path.join(unzipDir, shpFile);
       const geojson = { type: 'FeatureCollection', features: [] };
 
       const source = await shapefile.open(shpFilePath);
-      while (true) {
-        const result = await source.read();
-        if (result.done) break;
-        geojson.features.push({ type: 'Feature', geometry: result.value.geometry, properties: result.value.properties });
+      for await (const result of source) {
+        geojson.features.push({ type: 'Feature', geometry: result.geometry, properties: result.properties });
       }
 
-      // Cleanup files after reading
       await unlinkAsync(zipPath);
       await rmdirAsync(unzipDir, { recursive: true, force: true });
 
       res.json({ message: 'Shapefile uploaded and processed', data: geojson });
     } catch (error) {
-      // Cleanup files on error too
-      try {
-        await unlinkAsync(zipPath);
-        await rmdirAsync(unzipDir, { recursive: true, force: true });
-      } catch (cleanupErr) {
-        console.error('Error cleaning up after shapefile error:', cleanupErr);
-      }
+      await unlinkAsync(zipPath).catch(() => {});
+      await rmdirAsync(unzipDir, { recursive: true, force: true }).catch(() => {});
       res.status(500).json({ error: error.message });
     }
   });
 });
 
-// =============================================
-// AUTH ROUTES
-// =============================================
-
-// Register
 app.post('/api/auth/register', async (req, res, next) => {
   try {
     const { name, email, password } = req.body;
-    if (!name || !email || !password) return res.status(400).json({ error: 'Name, email, and password required' });
+    if (!name || !email || !password) return res.status(400).json({ error: 'All fields required' });
 
-    const emailLower = email.toLowerCase();
-    const userExists = await pool.query('SELECT id FROM users WHERE email = $1', [emailLower]);
-    if (userExists.rowCount > 0) return res.status(409).json({ error: 'User already exists' });
+    const emailLower = email.toLowerCase().trim();
+    const { rowCount } = await pool.query('SELECT 1 FROM users WHERE email = $1', [emailLower]);
+    if (rowCount > 0) return res.status(409).json({ error: 'User already exists' });
 
     const hashedPassword = await bcrypt.hash(password, 12);
     const otp = generateOTP();
 
     const { rows } = await pool.query(
-      `INSERT INTO users (name, email, password, is_verified, otp, role) 
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, email, is_verified`,
-      [name, emailLower, hashedPassword, false, otp, 'user']
+      `INSERT INTO users (name, email, password, is_verified, otp, role) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, email, is_verified`,
+      [name.trim(), emailLower, hashedPassword, false, otp, 'user']
     );
 
-    // Send OTP email
     await transporter.sendMail({
-      from: `"ARU-SDMS" <${process.env.EMAIL_USER.trim()}>`,
+      from: process.env.EMAIL_USER,
       to: emailLower,
-      subject: 'Verify your account OTP',
-      text: `Your OTP code is: ${otp}. It will expire shortly.`,
-      html: `<p>Your OTP code is: <b>${otp}</b>. It will expire shortly.</p>`
+      subject: 'Verify your account',
+      text: `Your OTP is: ${otp}`,
+      html: `<p>Your OTP is: <strong>${otp}</strong></p>`
     });
 
-    res.status(201).json({ message: 'User registered. Please verify your email.', user: { id: rows[0].id, name: rows[0].name, email: rows[0].email } });
+    res.status(201).json({ message: 'Registered. Verify your email.', user: rows[0] });
   } catch (err) {
     next(err);
   }
 });
 
-// Verify OTP
 app.post('/api/auth/verify', async (req, res, next) => {
   try {
     const { email, otp } = req.body;
     if (!email || !otp) return res.status(400).json({ error: 'Email and OTP required' });
 
-    const emailLower = email.toLowerCase();
+    const emailLower = email.toLowerCase().trim();
     const { rows } = await pool.query('SELECT id, otp, is_verified FROM users WHERE email = $1', [emailLower]);
     if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
 
     const user = rows[0];
-    if (user.is_verified) return res.status(400).json({ error: 'User already verified' });
-
+    if (user.is_verified) return res.status(400).json({ error: 'Already verified' });
     if (user.otp !== otp) return res.status(400).json({ error: 'Invalid OTP' });
 
     await pool.query('UPDATE users SET is_verified = true, otp = NULL WHERE id = $1', [user.id]);
-
-    res.json({ message: 'Email verified successfully. You can now login.' });
+    res.json({ message: 'Email verified' });
   } catch (err) {
     next(err);
   }
 });
 
-// Login
 app.post('/api/auth/login', async (req, res, next) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
 
-    const emailLower = email.toLowerCase();
+    const emailLower = email.toLowerCase().trim();
     const { rows } = await pool.query('SELECT * FROM users WHERE email = $1', [emailLower]);
-    if (rows.length === 0) return res.status(401).json({ error: 'Invalid email or password' });
+    if (rows.length === 0) return res.status(401).json({ error: 'Invalid credentials' });
 
     const user = rows[0];
     if (!user.is_verified) return res.status(401).json({ error: 'Email not verified' });
 
-    const passwordMatch = await bcrypt.compare(password, user.password);
-    if (!passwordMatch) return res.status(401).json({ error: 'Invalid email or password' });
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) return res.status(401).json({ error: 'Invalid credentials' });
 
-    const tokenPayload = { id: user.id, email: user.email, role: user.role };
-    const token = jwt.sign(tokenPayload, process.env.JWT_SECRET.trim(), { expiresIn: '7d' });
-
+    const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, process.env.JWT_SECRET.trim(), { expiresIn: '7d' });
     res.json({ message: 'Login successful', token, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
   } catch (err) {
     next(err);
   }
 });
 
-// Logout (optional, if using sessions)
 app.post('/api/auth/logout', (req, res) => {
   req.logout(() => {
     req.session.destroy(err => {
-      if (err) return res.status(500).json({ error: 'Logout failed' });
+      if (err) return res.status(500).json({ error: err.message });
       res.clearCookie('connect.sid');
-      res.json({ message: 'Logged out successfully' });
+      res.json({ message: 'Logged out' });
     });
   });
 });
 
-// =============================================
-// SOCIAL AUTH ROUTES
-// =============================================
-if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && !process.env.GOOGLE_CLIENT_ID.startsWith('your_')) {
   app.get('/auth/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
 
   app.get('/auth/google/callback',
     passport.authenticate('google', { failureRedirect: `${process.env.CLIENT_URL}/login` }),
     (req, res) => {
-      // Generate JWT after successful login
-      const tokenPayload = { id: req.user.id, email: req.user.email, role: req.user.role };
-      const token = jwt.sign(tokenPayload, process.env.JWT_SECRET.trim(), { expiresIn: '7d' });
-      res.redirect(`${process.env.CLIENT_URL}/social-login?token=${token}`);
+      const token = jwt.sign({ id: req.user.id, email: req.user.email, role: req.user.role }, process.env.JWT_SECRET.trim(), { expiresIn: '7d' });
+      res.redirect(`${process.env.CLIENT_URL}/social-login?token=${encodeURIComponent(token)}`);
     }
   );
 }
 
-if (process.env.FACEBOOK_CLIENT_ID && process.env.FACEBOOK_CLIENT_SECRET) {
-  app.get('/auth/facebook', passport.authenticate('facebook', { scope: ['email'] }));
-
-  app.get('/auth/facebook/callback',
-    passport.authenticate('facebook', { failureRedirect: `${process.env.CLIENT_URL}/login` }),
-    (req, res) => {
-      const tokenPayload = { id: req.user.id, email: req.user.email, role: req.user.role };
-      const token = jwt.sign(tokenPayload, process.env.JWT_SECRET.trim(), { expiresIn: '7d' });
-      res.redirect(`${process.env.CLIENT_URL}/social-login?token=${token}`);
-    }
-  );
-}
-
-if (process.env.TWITTER_CONSUMER_KEY && process.env.TWITTER_CONSUMER_SECRET) {
-  app.get('/auth/twitter', passport.authenticate('twitter'));
-
-  app.get('/auth/twitter/callback',
-    passport.authenticate('twitter', { failureRedirect: `${process.env.CLIENT_URL}/login` }),
-    (req, res) => {
-      const tokenPayload = { id: req.user.id, email: req.user.email, role: req.user.role };
-      const token = jwt.sign(tokenPayload, process.env.JWT_SECRET.trim(), { expiresIn: '7d' });
-      res.redirect(`${process.env.CLIENT_URL}/social-login?token=${token}`);
-    }
-  );
-}
-
-// =============================================
-// HEALTH CHECK ROUTE
-// =============================================
 app.get('/api/health', async (req, res) => {
-  const dbConnected = await testDatabaseConnection();
-  const redisConnected = redisClient.isReady;
-
-  res.json({
-    status: 'ok',
-    database: dbConnected ? 'connected' : 'disconnected',
-    redis: redisConnected ? 'connected' : 'disconnected',
-    serverTime: new Date()
-  });
+  const dbStatus = await testDatabaseConnection();
+  res.json({ status: 'ok', database: dbStatus ? 'connected' : 'disconnected', serverTime: new Date() });
 });
 
-// =============================================
-// GLOBAL ERROR HANDLER
-// =============================================
 app.use((err, req, res, next) => {
-  console.error('Server Error:', err);
-  const status = err.status || 500;
-  res.status(status).json({ error: err.message || 'Internal Server Error' });
+  console.error('Server Error:', err.stack);
+  res.status(err.status || 500).json({ error: err.message || 'Internal Server Error' });
 });
 
-// =============================================
-// START SERVER
-// =============================================
 (async () => {
   await testDatabaseConnection();
-
-  if (!redisClient.isReady) {
-    console.warn('⚠️ Redis not connected. Using in-memory session store. Sessions will not persist.');
-  }
-
-  app.listen(PORT, () => {
-    console.log(`🚀 Server running on port ${PORT}`);
-  });
+  app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
 })();
