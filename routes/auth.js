@@ -237,37 +237,37 @@
 // });
 
 // module.exports = router;
-
-
 const express = require('express');
-const router = express.Router();
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const pool = require('../db'); // <-- you can export pool from your main file or put this logic here
+const pool = require('../db'); // PostgreSQL connection
+const router = express.Router();
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
-// Register route
+// ==========================
+// User Registration Route
+// ==========================
 router.post('/register', async (req, res, next) => {
   try {
     const { name, email, password, role = 'user' } = req.body;
 
     if (!name || !email || !password) {
-      return res.status(400).json({ error: 'Name, email, and password are required' });
+      return res.status(400).json({ error: 'Name, email, and password are required.' });
     }
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
-      return res.status(400).json({ error: 'Invalid email format' });
+      return res.status(400).json({ error: 'Invalid email format.' });
     }
 
     if (password.length < 8) {
-      return res.status(400).json({ error: 'Password must be at least 8 characters' });
+      return res.status(400).json({ error: 'Password must be at least 8 characters long.' });
     }
 
-    const userExists = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
-    if (userExists.rows.length > 0) {
-      return res.status(409).json({ error: 'Email already in use' });
+    const existingUser = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
+    if (existingUser.rows.length > 0) {
+      return res.status(409).json({ error: 'Email is already registered.' });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -279,22 +279,52 @@ router.post('/register', async (req, res, next) => {
     );
 
     const token = jwt.sign(
-      {
-        id: newUser.rows[0].id,
-        role: newUser.rows[0].role,
-        email: newUser.rows[0].email
-      },
+      { id: newUser.rows[0].id, email: newUser.rows[0].email, role: newUser.rows[0].role },
       JWT_SECRET,
       { expiresIn: '24h' }
     );
 
-    res.status(201).json({
-      user: newUser.rows[0],
-      token
-    });
+    res.status(201).json({ user: newUser.rows[0], token });
 
   } catch (err) {
-    console.error('Register error:', err);
+    console.error('Registration error:', err);
+    next(err);
+  }
+});
+
+// ==========================
+// User Login Route
+// ==========================
+router.post('/login', async (req, res, next) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password are required.' });
+    }
+
+    const userRes = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    const user = userRes.rows[0];
+
+    if (!user) {
+      return res.status(401).json({ error: 'Invalid email or password.' });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(401).json({ error: 'Invalid email or password.' });
+    }
+
+    const token = jwt.sign(
+      { id: user.id, email: user.email, role: user.role },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
+    res.json({ user: { id: user.id, name: user.name, email: user.email, role: user.role }, token });
+
+  } catch (err) {
+    console.error('Login error:', err);
     next(err);
   }
 });
