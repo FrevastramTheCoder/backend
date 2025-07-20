@@ -1817,6 +1817,26 @@ app.post('/api/auth/reset-password-request', async (req, res, next) => {
   }
 });
 
+app.post('/api/auth/reset-password', async (req, res, next) => {
+  try {
+    const { email, otp, newPassword } = req.body;
+    if (!email || !otp || !newPassword) return res.status(400).json({ error: 'All fields required' });
+
+    const emailLower = email.toLowerCase().trim();
+    const { rows } = await pool.query('SELECT id, otp FROM users WHERE email = $1', [emailLower]);
+    if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
+
+    const user = rows[0];
+    if (user.otp !== otp) return res.status(400).json({ error: 'Invalid OTP' });
+
+    const hashedPassword = await bcrypt.hash(newPassword, 12);
+    await pool.query('UPDATE users SET password = $1, otp = NULL WHERE id = $2', [hashedPassword, user.id]);
+    res.json({ message: 'Password reset successful' });
+  } catch (err) {
+    next(err);
+  }
+});
+
 if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && !process.env.GOOGLE_CLIENT_ID.startsWith('your_')) {
   app.get('/auth/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
 
