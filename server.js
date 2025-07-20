@@ -1864,7 +1864,6 @@
 //   app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
 // })();
 
-
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '.env') });
 
@@ -1892,7 +1891,7 @@ const rmdirAsync = promisify(fs.rm || fs.rmdir);
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// Configuration Validation
+// Configuration Validation (unchanged)
 const validateConfig = () => {
   const requiredVars = [
     'JWT_SECRET', 'SESSION_SECRET', 'DB_USER', 'DB_PASS', 'DB_HOST', 'DB_NAME', 'DB_PORT',
@@ -1909,14 +1908,14 @@ const validateConfig = () => {
 };
 validateConfig();
 
-// Rate Limiting
+// Rate Limiting (unchanged)
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100 // Limit each IP to 100 requests per windowMs
+  windowMs: 15 * 60 * 1000,
+  max: 100
 });
 app.use(limiter);
 
-// Redis Client Setup
+// Redis Client Setup (unchanged)
 let sessionStore;
 let redisErrorLogged = false;
 
@@ -1950,13 +1949,13 @@ redisClient.on('ready', () => {
   }
 })();
 
-// Middleware
+// Middleware (unchanged)
 app.use(cors({
   origin: (origin, callback) => {
     const allowedOrigins = [
       'https://aru-sdms.vercel.app',
       'https://aru-sdms-git-main-frevastramthecoders-projects.vercel.app',
-      'https://aru-sdms-lmm221k5y-frevastramthecoders-projects.vercel.app' // Added new preview origin
+      'https://aru-sdms-lmm221k5y-frevastramthecoders-projects.vercel.app'
     ];
     if (!origin || allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
@@ -1982,7 +1981,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb', parameterLimit: 1000
 app.use(passport.initialize());
 app.use(passport.session());
 
-// Root Route
+// Root Route (unchanged)
 app.get('/', (req, res) => {
   res.json({
     message: 'Welcome to the ARU-SDMS Backend API',
@@ -1992,7 +1991,7 @@ app.get('/', (req, res) => {
   });
 });
 
-// Database Connection
+// Database Connection (unchanged)
 const pool = new Pool({
   user: process.env.DB_USER.trim(),
   host: process.env.DB_HOST.trim(),
@@ -2018,7 +2017,7 @@ const testDatabaseConnection = async () => {
   }
 };
 
-// Auth Middleware
+// Auth Middleware (unchanged)
 const authenticate = (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader) return res.status(401).json({ error: 'Authentication required' });
@@ -2038,17 +2037,17 @@ const isAdmin = (req, res, next) => {
   next();
 };
 
-// Email Transporter
+// Email Transporter (unchanged)
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: { user: process.env.EMAIL_USER.trim(), pass: process.env.EMAIL_PASS.trim() },
 });
 transporter.verify((error) => error && console.error('❌ Email Transporter Error:', error));
 
-// OTP Generator
+// OTP Generator (unchanged)
 const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString();
 
-// Passport Setup
+// Passport Setup (unchanged)
 passport.serializeUser((user, done) => done(null, user.id));
 passport.deserializeUser(async (id, done) => {
   try {
@@ -2089,6 +2088,7 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && !process
   }));
 }
 
+// Dataset Validation (unchanged)
 const VALID_DATASETS = [
   'buildings', 'footpaths', 'electricitySupply', 'securityLights', 'roads',
   'drainageSystems', 'recreationalAreas', 'vimbweta', 'solidWasteCollection',
@@ -2101,6 +2101,7 @@ const validateDataset = (req, res, next) => {
   next();
 };
 
+// Dataset Routes (unchanged)
 app.get('/api/:dataset', authenticate, validateDataset, async (req, res, next) => {
   try {
     const { dataset } = req.params;
@@ -2145,6 +2146,7 @@ app.delete('/api/:dataset/:id', authenticate, validateDataset, async (req, res, 
   }
 });
 
+// Shapefile Upload (unchanged)
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const uploadDir = path.join(__dirname, 'Uploads', 'shapefiles');
@@ -2205,6 +2207,7 @@ app.post('/api/shapefile/upload', authenticate, (req, res) => {
   });
 });
 
+// Auth Routes
 app.post('/api/auth/register', async (req, res, next) => {
   try {
     const { name, email, password } = req.body;
@@ -2236,7 +2239,7 @@ app.post('/api/auth/register', async (req, res, next) => {
   }
 });
 
-app.post('/api/auth/verify', async (req, res, next) => {
+app.post('/api/auth/verify-otp', async (req, res, next) => { // Renamed from /verify
   try {
     const { email, otp } = req.body;
     if (!email || !otp) return res.status(400).json({ error: 'Email and OTP required' });
@@ -2251,6 +2254,31 @@ app.post('/api/auth/verify', async (req, res, next) => {
 
     await pool.query('UPDATE users SET is_verified = true, otp = NULL WHERE id = $1', [user.id]);
     res.json({ message: 'Email verified' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/api/auth/resend-otp', async (req, res, next) => { // New route
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email required' });
+
+    const emailLower = email.toLowerCase().trim();
+    const { rows } = await pool.query('SELECT id FROM users WHERE email = $1', [emailLower]);
+    if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
+
+    const otp = generateOTP();
+    await pool.query('UPDATE users SET otp = $1 WHERE id = $2', [otp, rows[0].id]);
+    await transporter.sendMail({
+      from: process.env.EMAIL_USER,
+      to: emailLower,
+      subject: 'Resend Verification OTP',
+      text: `Your new OTP is: ${otp}`,
+      html: `<p>Your new OTP is: <strong>${otp}</strong></p>`
+    });
+
+    res.json({ message: 'New OTP sent to your email' });
   } catch (err) {
     next(err);
   }
