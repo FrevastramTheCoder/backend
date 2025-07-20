@@ -1459,8 +1459,8 @@ redisClient.on('ready', () => {
 app.use(cors({
   origin: (origin, callback) => {
     const allowedOrigins = [
-      'https://aru-sms.vercel.app',
-      'https://aru-sms-git-main-frevastramthecoders-projects.vercel.app'
+      'https://aru-sdms.vercel.app',
+      'https://aru-sdms-git-main-frevastramthecoders-projects.vercel.app'
     ];
     if (!origin || allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
