@@ -1387,8 +1387,9 @@ const bcrypt = require('bcrypt');
 const { promisify } = require('util');
 const AdmZip = require('adm-zip');
 const passport = require('passport');
-const GoogleStrategy = require('passport-google-oauth20').Strategy; // Other strategies optional
+const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const nodemailer = require('nodemailer');
+const rateLimit = require('express-rate-limit');
 
 const unlinkAsync = promisify(fs.unlink);
 const rmdirAsync = promisify(fs.rm || fs.rmdir);
@@ -1402,9 +1403,7 @@ const validateConfig = () => {
     'JWT_SECRET', 'SESSION_SECRET', 'DB_USER', 'DB_PASS', 'DB_HOST', 'DB_NAME', 'DB_PORT',
     'EMAIL_USER', 'EMAIL_PASS', 'CORS_ORIGIN', 'CLIENT_URL', 'SERVER_URL', 'REDIS_URL'
   ];
-  const optionalVars = [
-    'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'
-  ];
+  const optionalVars = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'];
   const missingVars = requiredVars.filter(v => !process.env[v] || process.env[v].trim() === '');
 
   if (missingVars.length > 0) {
@@ -1414,6 +1413,13 @@ const validateConfig = () => {
   console.log('✅ Environment variables validated successfully');
 };
 validateConfig();
+
+// Rate Limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100 // Limit each IP to 100 requests per windowMs
+});
+app.use(limiter);
 
 // Redis Client Setup
 let sessionStore;
@@ -1451,7 +1457,17 @@ redisClient.on('ready', () => {
 
 // Middleware
 app.use(cors({
-  origin: process.env.CORS_ORIGIN.trim(),
+  origin: (origin, callback) => {
+    const allowedOrigins = [
+      'https://aru-sms.vercel.app',
+      'https://aru-sms-git-main-frevastramthecoders-projects.vercel.app'
+    ];
+    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
@@ -1774,6 +1790,31 @@ app.post('/api/auth/logout', (req, res) => {
       res.json({ message: 'Logged out' });
     });
   });
+});
+
+app.post('/api/auth/reset-password-request', async (req, res, next) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email required' });
+
+    const emailLower = email.toLowerCase().trim();
+    const { rows } = await pool.query('SELECT id, email FROM users WHERE email = $1', [emailLower]);
+    if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
+
+    const otp = generateOTP();
+    await pool.query('UPDATE users SET otp = $1 WHERE id = $2', [otp, rows[0].id]);
+    await transporter.sendMail({
+      from: process.env.EMAIL_USER,
+      to: emailLower,
+      subject: 'Reset Password OTP',
+      text: `Your OTP is: ${otp}`,
+      html: `<p>Your OTP is: <strong>${otp}</strong></p>`
+    });
+
+    res.json({ message: 'Reset password OTP sent' });
+  } catch (err) {
+    next(err);
+  }
 });
 
 if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && !process.env.GOOGLE_CLIENT_ID.startsWith('your_')) {
