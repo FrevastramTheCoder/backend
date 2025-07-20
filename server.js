@@ -1370,6 +1370,501 @@
 //   });
 // })();
 
+// const path = require('path');
+// require('dotenv').config({ path: path.resolve(__dirname, '.env') });
+
+// const express = require('express');
+// const cors = require('cors');
+// const session = require('express-session');
+// const RedisStore = require('connect-redis').default;
+// const { createClient } = require('redis');
+// const { Pool } = require('pg');
+// const multer = require('multer');
+// const fs = require('fs');
+// const shapefile = require('shapefile');
+// const jwt = require('jsonwebtoken');
+// const bcrypt = require('bcrypt');
+// const { promisify } = require('util');
+// const AdmZip = require('adm-zip');
+// const passport = require('passport');
+// const GoogleStrategy = require('passport-google-oauth20').Strategy;
+// const nodemailer = require('nodemailer');
+// const rateLimit = require('express-rate-limit');
+
+// const unlinkAsync = promisify(fs.unlink);
+// const rmdirAsync = promisify(fs.rm || fs.rmdir);
+
+// const app = express();
+// const PORT = process.env.PORT || 10000;
+
+// // Configuration Validation
+// const validateConfig = () => {
+//   const requiredVars = [
+//     'JWT_SECRET', 'SESSION_SECRET', 'DB_USER', 'DB_PASS', 'DB_HOST', 'DB_NAME', 'DB_PORT',
+//     'EMAIL_USER', 'EMAIL_PASS', 'CORS_ORIGIN', 'CLIENT_URL', 'SERVER_URL', 'REDIS_URL'
+//   ];
+//   const optionalVars = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'];
+//   const missingVars = requiredVars.filter(v => !process.env[v] || process.env[v].trim() === '');
+
+//   if (missingVars.length > 0) {
+//     console.error('❌ Missing required environment variables:', missingVars);
+//     process.exit(1);
+//   }
+//   console.log('✅ Environment variables validated successfully');
+// };
+// validateConfig();
+
+// // Rate Limiting
+// const limiter = rateLimit({
+//   windowMs: 15 * 60 * 1000, // 15 minutes
+//   max: 100 // Limit each IP to 100 requests per windowMs
+// });
+// app.use(limiter);
+
+// // Redis Client Setup
+// let sessionStore;
+// let redisErrorLogged = false;
+
+// const redisClient = createClient({
+//   url: process.env.REDIS_URL,
+//   socket: {
+//     reconnectStrategy: retries => (retries > 10 ? false : Math.min(retries * 100, 3000))
+//   }
+// });
+
+// redisClient.on('error', err => {
+//   if (!redisErrorLogged) {
+//     console.error('Redis Client Error:', err.message);
+//     redisErrorLogged = true;
+//     sessionStore = new session.MemoryStore();
+//   }
+// });
+// redisClient.on('connect', () => console.log('Redis Client Connected'));
+// redisClient.on('ready', () => {
+//   console.log('Redis Client Ready');
+//   sessionStore = new RedisStore({ client: redisClient });
+//   redisErrorLogged = false;
+// });
+
+// (async () => {
+//   try {
+//     await redisClient.connect();
+//   } catch (err) {
+//     console.error('Redis Connection Failed:', err.message);
+//     sessionStore = new session.MemoryStore();
+//   }
+// })();
+
+// // Middleware
+// app.use(cors({
+//   origin: (origin, callback) => {
+//     const allowedOrigins = [
+//       'https://aru-sdms.vercel.app',
+//       'https://aru-sdms-git-main-frevastramthecoders-projects.vercel.app'
+//     ];
+//     if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+//       callback(null, true);
+//     } else {
+//       callback(new Error('Not allowed by CORS'));
+//     }
+//   },
+//   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+//   allowedHeaders: ['Content-Type', 'Authorization'],
+//   credentials: true
+// }));
+
+// app.use(session({
+//   store: sessionStore,
+//   secret: process.env.SESSION_SECRET.trim(),
+//   resave: false,
+//   saveUninitialized: false,
+//   cookie: { secure: process.env.NODE_ENV === 'production', maxAge: 24 * 60 * 60 * 1000, sameSite: 'lax' }
+// }));
+
+// app.use(express.json({ limit: '50mb' }));
+// app.use(express.urlencoded({ extended: true, limit: '50mb', parameterLimit: 1000 }));
+// app.use(passport.initialize());
+// app.use(passport.session());
+
+// // Root Route
+// app.get('/', (req, res) => {
+//   res.json({
+//     message: 'Welcome to the ARU-SDMS Backend API',
+//     status: 'running',
+//     version: '1.0.0',
+//     endpoints: { health: '/api/health', auth: '/api/auth', datasets: '/api/:dataset' }
+//   });
+// });
+
+// // Database Connection
+// const pool = new Pool({
+//   user: process.env.DB_USER.trim(),
+//   host: process.env.DB_HOST.trim(),
+//   database: process.env.DB_NAME.trim(),
+//   password: process.env.DB_PASS.trim(),
+//   port: Number(process.env.DB_PORT),
+//   ssl: { rejectUnauthorized: false }
+// });
+
+// pool.on('error', (err, client) => console.error('PostgreSQL Pool Error:', err.message));
+
+// const testDatabaseConnection = async () => {
+//   const client = await pool.connect();
+//   try {
+//     const res = await client.query('SELECT NOW(), version()');
+//     console.log('✅ Database connected:', res.rows[0].version);
+//     return true;
+//   } catch (err) {
+//     console.error('❌ Database connection failed:', err.message);
+//     return false;
+//   } finally {
+//     client.release();
+//   }
+// };
+
+// // Auth Middleware
+// const authenticate = (req, res, next) => {
+//   const authHeader = req.headers.authorization;
+//   if (!authHeader) return res.status(401).json({ error: 'Authentication required' });
+
+//   const [bearer, token] = authHeader.split(' ');
+//   if (bearer !== 'Bearer' || !token) return res.status(401).json({ error: 'Invalid token format' });
+
+//   jwt.verify(token, process.env.JWT_SECRET.trim(), (err, decoded) => {
+//     if (err) return res.status(403).json({ error: 'Invalid or expired token', details: err.message });
+//     req.user = decoded;
+//     next();
+//   });
+// };
+
+// const isAdmin = (req, res, next) => {
+//   if (req.user?.role !== 'admin') return res.status(403).json({ error: 'Admin privileges required' });
+//   next();
+// };
+
+// // Email Transporter
+// const transporter = nodemailer.createTransport({
+//   service: 'gmail',
+//   auth: { user: process.env.EMAIL_USER.trim(), pass: process.env.EMAIL_PASS.trim() },
+// });
+// transporter.verify((error) => error && console.error('❌ Email Transporter Error:', error));
+
+// // OTP Generator
+// const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString();
+
+// // Passport Setup
+// passport.serializeUser((user, done) => done(null, user.id));
+// passport.deserializeUser(async (id, done) => {
+//   try {
+//     const res = await pool.query('SELECT * FROM users WHERE id = $1', [id]);
+//     done(null, res.rows[0] || false);
+//   } catch (err) {
+//     done(err, null);
+//   }
+// });
+
+// async function findOrCreateUser(profile, provider) {
+//   const email = profile.emails?.[0]?.value;
+//   if (!email) throw new Error('No email in social profile');
+
+//   const { rows } = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+//   if (rows.length > 0) return rows[0];
+
+//   const name = profile.displayName || profile.username || 'No Name';
+//   const [newUser] = await pool.query(
+//     `INSERT INTO users (name, email, is_verified, role, provider) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+//     [name, email, true, 'user', provider]
+//   ).rows;
+//   return newUser;
+// }
+
+// if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && !process.env.GOOGLE_CLIENT_ID.startsWith('your_')) {
+//   passport.use(new GoogleStrategy({
+//     clientID: process.env.GOOGLE_CLIENT_ID.trim(),
+//     clientSecret: process.env.GOOGLE_CLIENT_SECRET.trim(),
+//     callbackURL: `${process.env.SERVER_URL}/auth/google/callback`
+//   }, async (accessToken, refreshToken, profile, done) => {
+//     try {
+//       const user = await findOrCreateUser(profile, 'google');
+//       done(null, user);
+//     } catch (err) {
+//       done(err, null);
+//     }
+//   }));
+// }
+
+// const VALID_DATASETS = [
+//   'buildings', 'footpaths', 'electricitySupply', 'securityLights', 'roads',
+//   'drainageSystems', 'recreationalAreas', 'vimbweta', 'solidWasteCollection',
+//   'parking', 'vegetation'
+// ];
+
+// const validateDataset = (req, res, next) => {
+//   const dataset = req.params.dataset;
+//   if (!VALID_DATASETS.includes(dataset)) return res.status(400).json({ error: `Invalid dataset: ${dataset}` });
+//   next();
+// };
+
+// app.get('/api/:dataset', authenticate, validateDataset, async (req, res, next) => {
+//   try {
+//     const { dataset } = req.params;
+//     const result = await pool.query(`SELECT id, properties FROM ${dataset} ORDER BY id ASC`);
+//     res.json({ features: result.rows });
+//   } catch (err) {
+//     next(err);
+//   }
+// });
+
+// app.post('/api/:dataset', authenticate, validateDataset, async (req, res, next) => {
+//   try {
+//     const { dataset } = req.params;
+//     const properties = req.body;
+//     const result = await pool.query(`INSERT INTO ${dataset} (properties) VALUES ($1) RETURNING id, properties`, [properties]);
+//     res.status(201).json({ message: 'Item uploaded!', record: result.rows[0] });
+//   } catch (err) {
+//     next(err);
+//   }
+// });
+
+// app.put('/api/:dataset/:id', authenticate, validateDataset, async (req, res, next) => {
+//   try {
+//     const { dataset, id } = req.params;
+//     const properties = req.body;
+//     const result = await pool.query(`UPDATE ${dataset} SET properties = $1 WHERE id = $2 RETURNING id, properties`, [properties, id]);
+//     if (result.rowCount === 0) return res.status(404).json({ error: 'Record not found' });
+//     res.json({ message: 'Updated!', record: result.rows[0] });
+//   } catch (err) {
+//     next(err);
+//   }
+// });
+
+// app.delete('/api/:dataset/:id', authenticate, validateDataset, async (req, res, next) => {
+//   try {
+//     const { dataset, id } = req.params;
+//     const result = await pool.query(`DELETE FROM ${dataset} WHERE id = $1`, [id]);
+//     if (result.rowCount === 0) return res.status(404).json({ error: 'Record not found' });
+//     res.json({ message: 'Deleted!' });
+//   } catch (err) {
+//     next(err);
+//   }
+// });
+
+// const storage = multer.diskStorage({
+//   destination: (req, file, cb) => {
+//     const uploadDir = path.join(__dirname, 'Uploads', 'shapefiles');
+//     if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+//     cb(null, uploadDir);
+//   },
+//   filename: (req, file, cb) => {
+//     const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+//     cb(null, `${uniqueSuffix}-${file.originalname}`);
+//   }
+// });
+
+// const fileFilter = (req, file, cb) => {
+//   if (file.mimetype === 'application/zip' || file.originalname.match(/\.(zip)$/i)) {
+//     cb(null, true);
+//   } else {
+//     cb(new Error('Only .zip files are allowed!'), false);
+//   }
+// };
+
+// const upload = multer({ storage, fileFilter, limits: { fileSize: 10 * 1024 * 1024 } }).single('shapefile');
+
+// app.post('/api/shapefile/upload', authenticate, (req, res) => {
+//   upload(req, res, async (err) => {
+//     if (err) {
+//       return res.status(err.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ error: err.message });
+//     }
+//     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+//     const zipPath = req.file.path;
+//     const unzipDir = path.join(path.dirname(zipPath), path.basename(zipPath, '.zip'));
+
+//     try {
+//       const zip = new AdmZip(zipPath);
+//       zip.extractAllTo(unzipDir, true);
+
+//       const files = fs.readdirSync(unzipDir);
+//       const shpFile = files.find(f => f.toLowerCase().endsWith('.shp'));
+//       if (!shpFile) throw new Error('No .shp file found in the ZIP');
+
+//       const shpFilePath = path.join(unzipDir, shpFile);
+//       const geojson = { type: 'FeatureCollection', features: [] };
+
+//       const source = await shapefile.open(shpFilePath);
+//       for await (const result of source) {
+//         geojson.features.push({ type: 'Feature', geometry: result.geometry, properties: result.properties });
+//       }
+
+//       await unlinkAsync(zipPath);
+//       await rmdirAsync(unzipDir, { recursive: true, force: true });
+
+//       res.json({ message: 'Shapefile uploaded and processed', data: geojson });
+//     } catch (error) {
+//       await unlinkAsync(zipPath).catch(() => {});
+//       await rmdirAsync(unzipDir, { recursive: true, force: true }).catch(() => {});
+//       res.status(500).json({ error: error.message });
+//     }
+//   });
+// });
+
+// app.post('/api/auth/register', async (req, res, next) => {
+//   try {
+//     const { name, email, password } = req.body;
+//     if (!name || !email || !password) return res.status(400).json({ error: 'All fields required' });
+
+//     const emailLower = email.toLowerCase().trim();
+//     const { rowCount } = await pool.query('SELECT 1 FROM users WHERE email = $1', [emailLower]);
+//     if (rowCount > 0) return res.status(409).json({ error: 'User already exists' });
+
+//     const hashedPassword = await bcrypt.hash(password, 12);
+//     const otp = generateOTP();
+
+//     const { rows } = await pool.query(
+//       `INSERT INTO users (name, email, password, is_verified, otp, role) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, email, is_verified`,
+//       [name.trim(), emailLower, hashedPassword, false, otp, 'user']
+//     );
+
+//     await transporter.sendMail({
+//       from: process.env.EMAIL_USER,
+//       to: emailLower,
+//       subject: 'Verify your account',
+//       text: `Your OTP is: ${otp}`,
+//       html: `<p>Your OTP is: <strong>${otp}</strong></p>`
+//     });
+
+//     res.status(201).json({ message: 'Registered. Verify your email.', user: rows[0] });
+//   } catch (err) {
+//     next(err);
+//   }
+// });
+
+// app.post('/api/auth/verify', async (req, res, next) => {
+//   try {
+//     const { email, otp } = req.body;
+//     if (!email || !otp) return res.status(400).json({ error: 'Email and OTP required' });
+
+//     const emailLower = email.toLowerCase().trim();
+//     const { rows } = await pool.query('SELECT id, otp, is_verified FROM users WHERE email = $1', [emailLower]);
+//     if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
+
+//     const user = rows[0];
+//     if (user.is_verified) return res.status(400).json({ error: 'Already verified' });
+//     if (user.otp !== otp) return res.status(400).json({ error: 'Invalid OTP' });
+
+//     await pool.query('UPDATE users SET is_verified = true, otp = NULL WHERE id = $1', [user.id]);
+//     res.json({ message: 'Email verified' });
+//   } catch (err) {
+//     next(err);
+//   }
+// });
+
+// app.post('/api/auth/login', async (req, res, next) => {
+//   try {
+//     const { email, password } = req.body;
+//     if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
+
+//     const emailLower = email.toLowerCase().trim();
+//     const { rows } = await pool.query('SELECT * FROM users WHERE email = $1', [emailLower]);
+//     if (rows.length === 0) return res.status(401).json({ error: 'Invalid credentials' });
+
+//     const user = rows[0];
+//     if (!user.is_verified) return res.status(401).json({ error: 'Email not verified' });
+
+//     const match = await bcrypt.compare(password, user.password);
+//     if (!match) return res.status(401).json({ error: 'Invalid credentials' });
+
+//     const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, process.env.JWT_SECRET.trim(), { expiresIn: '7d' });
+//     res.json({ message: 'Login successful', token, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
+//   } catch (err) {
+//     next(err);
+//   }
+// });
+
+// app.post('/api/auth/logout', (req, res) => {
+//   req.logout(() => {
+//     req.session.destroy(err => {
+//       if (err) return res.status(500).json({ error: err.message });
+//       res.clearCookie('connect.sid');
+//       res.json({ message: 'Logged out' });
+//     });
+//   });
+// });
+
+// app.post('/api/auth/reset-password-request', async (req, res, next) => {
+//   try {
+//     const { email } = req.body;
+//     if (!email) return res.status(400).json({ error: 'Email required' });
+
+//     const emailLower = email.toLowerCase().trim();
+//     const { rows } = await pool.query('SELECT id, email FROM users WHERE email = $1', [emailLower]);
+//     if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
+
+//     const otp = generateOTP();
+//     await pool.query('UPDATE users SET otp = $1 WHERE id = $2', [otp, rows[0].id]);
+//     await transporter.sendMail({
+//       from: process.env.EMAIL_USER,
+//       to: emailLower,
+//       subject: 'Reset Password OTP',
+//       text: `Your OTP is: ${otp}`,
+//       html: `<p>Your OTP is: <strong>${otp}</strong></p>`
+//     });
+
+//     res.json({ message: 'Reset password OTP sent' });
+//   } catch (err) {
+//     next(err);
+//   }
+// });
+
+// app.post('/api/auth/reset-password', async (req, res, next) => {
+//   try {
+//     const { email, otp, newPassword } = req.body;
+//     if (!email || !otp || !newPassword) return res.status(400).json({ error: 'All fields required' });
+
+//     const emailLower = email.toLowerCase().trim();
+//     const { rows } = await pool.query('SELECT id, otp FROM users WHERE email = $1', [emailLower]);
+//     if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
+
+//     const user = rows[0];
+//     if (user.otp !== otp) return res.status(400).json({ error: 'Invalid OTP' });
+
+//     const hashedPassword = await bcrypt.hash(newPassword, 12);
+//     await pool.query('UPDATE users SET password = $1, otp = NULL WHERE id = $2', [hashedPassword, user.id]);
+//     res.json({ message: 'Password reset successful' });
+//   } catch (err) {
+//     next(err);
+//   }
+// });
+
+// if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && !process.env.GOOGLE_CLIENT_ID.startsWith('your_')) {
+//   app.get('/auth/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
+
+//   app.get('/auth/google/callback',
+//     passport.authenticate('google', { failureRedirect: `${process.env.CLIENT_URL}/login` }),
+//     (req, res) => {
+//       const token = jwt.sign({ id: req.user.id, email: req.user.email, role: req.user.role }, process.env.JWT_SECRET.trim(), { expiresIn: '7d' });
+//       res.redirect(`${process.env.CLIENT_URL}/social-login?token=${encodeURIComponent(token)}`);
+//     }
+//   );
+// }
+
+// app.get('/api/health', async (req, res) => {
+//   const dbStatus = await testDatabaseConnection();
+//   res.json({ status: 'ok', database: dbStatus ? 'connected' : 'disconnected', serverTime: new Date() });
+// });
+
+// app.use((err, req, res, next) => {
+//   console.error('Server Error:', err.stack);
+//   res.status(err.status || 500).json({ error: err.message || 'Internal Server Error' });
+// });
+
+// (async () => {
+//   await testDatabaseConnection();
+//   app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+// })();
+
+
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '.env') });
 
@@ -1460,7 +1955,8 @@ app.use(cors({
   origin: (origin, callback) => {
     const allowedOrigins = [
       'https://aru-sdms.vercel.app',
-      'https://aru-sdms-git-main-frevastramthecoders-projects.vercel.app'
+      'https://aru-sdms-git-main-frevastramthecoders-projects.vercel.app',
+      'https://aru-sdms-lmm221k5y-frevastramthecoders-projects.vercel.app' // Added new preview origin
     ];
     if (!origin || allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
