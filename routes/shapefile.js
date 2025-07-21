@@ -1,6 +1,10 @@
+const express = require('express');
 const proj4 = require('proj4');
-const fs = require('fs');
 const shp = require('shpjs');
+const multer = require('multer'); // Assuming multer is used for file uploads
+
+const router = express.Router();
+const upload = multer({ storage: multer.memoryStorage() }); // Store file in memory as buffer
 
 async function processShapefile(fileBuffer, sourceCRS = 'EPSG:32737') {
   try {
@@ -11,7 +15,6 @@ async function processShapefile(fileBuffer, sourceCRS = 'EPSG:32737') {
       if (!Array.isArray(coords) || coords.length === 0) return null;
       return coords.map(coord => {
         if (Array.isArray(coord)) {
-          // Recursively process nested arrays
           return processCoordinates(coord, depth + 1);
         }
         if (!Array.isArray(coord) || coord.length < 2) {
@@ -41,7 +44,6 @@ async function processShapefile(fileBuffer, sourceCRS = 'EPSG:32737') {
           continue;
         }
 
-        // Preserve original structure for projection
         const transformNested = (coords) => {
           if (Array.isArray(coords[0]) && Array.isArray(coords[0][0])) {
             return coords.map(ring => proj4(proj4.defs(sourceCRS), proj4.defs('EPSG:4326'), ring.flat()));
@@ -52,11 +54,10 @@ async function processShapefile(fileBuffer, sourceCRS = 'EPSG:32737') {
         transformedCoords = transformNested(transformedCoords);
         console.log(`Transformed ${transformedCoords.length} coordinate sets for feature ${feature.id || 'unknown'}`);
 
-        // Reconstruct geometry based on original type
         if (feature.geometry.type === 'Polygon') {
-          feature.geometry.coordinates = [transformedCoords]; // Single ring
+          feature.geometry.coordinates = [transformedCoords];
         } else if (feature.geometry.type === 'MultiPolygon') {
-          feature.geometry.coordinates = transformedCoords.map(coords => [coords]); // Multiple rings
+          feature.geometry.coordinates = transformedCoords.map(coords => [coords]);
         } else {
           feature.geometry.coordinates = transformedCoords;
         }
@@ -79,4 +80,23 @@ async function processShapefile(fileBuffer, sourceCRS = 'EPSG:32737') {
   }
 }
 
-module.exports = { processShapefile };
+router.post('/:datasetType', upload.single('file'), async (req, res, next) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    const datasetType = req.params.datasetType;
+    const validDatasets = ['buildings', 'footpaths', 'electricitySupply', 'securityLights', 'roads', 'drainageSystems', 'recreationalAreas', 'vimbweta', 'solidWasteCollection', 'parking', 'vegetation', 'aruboundary'];
+    if (!validDatasets.includes(datasetType)) {
+      return res.status(400).json({ error: `Invalid dataset: ${datasetType}` });
+    }
+
+    const features = await processShapefile(req.file.buffer);
+    res.json({ message: 'Shapefile processed successfully', features });
+  } catch (error) {
+    next(error);
+  }
+});
+
+module.exports = router;
