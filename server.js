@@ -4384,13 +4384,14 @@ const cors = require('cors');
 const session = require('express-session');
 const RedisStore = require('connect-redis').default;
 const { createClient } = require('redis');
-const { Pool } = require('pg');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const nodemailer = require('nodemailer');
 const rateLimit = require('express-rate-limit');
+const pool = require('./middleware/db'); // Updated import
+const { authenticateToken } = require('./middleware/authMiddleware');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -4431,8 +4432,8 @@ const redisClient = createClient({
 });
 
 redisClient.on('error', err => {
+  console.error('Redis Client Error:', err.stack);
   if (!redisErrorLogged) {
-    console.error('Redis Client Error:', err.message);
     redisErrorLogged = true;
     sessionStore = new session.MemoryStore();
   }
@@ -4448,7 +4449,7 @@ redisClient.on('ready', () => {
   try {
     await redisClient.connect();
   } catch (err) {
-    console.error('Redis Connection Failed:', err.message);
+    console.error('Redis Connection Failed:', err.stack);
     sessionStore = new session.MemoryStore();
   }
 })();
@@ -4485,18 +4486,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb', parameterLimit: 1000
 app.use(passport.initialize());
 app.use(passport.session());
 
-// Database Connection
-const pool = new Pool({
-  user: process.env.DB_USER.trim(),
-  host: process.env.DB_HOST.trim(),
-  database: process.env.DB_NAME.trim(),
-  password: process.env.DB_PASS.trim(),
-  port: Number(process.env.DB_PORT),
-  ssl: { rejectUnauthorized: false }
-});
-
-pool.on('error', (err, client) => console.error('PostgreSQL Pool Error:', err.message));
-
+// Database Connection Test
 const testDatabaseConnection = async () => {
   const client = await pool.connect();
   try {
@@ -4504,7 +4494,7 @@ const testDatabaseConnection = async () => {
     console.log('✅ Database connected:', res.rows[0].version);
     return true;
   } catch (err) {
-    console.error('❌ Database connection failed:', err.message);
+    console.error('❌ Database connection failed:', err.stack);
     return false;
   } finally {
     client.release();
@@ -4592,8 +4582,6 @@ const validateDataset = (req, res, next) => {
 };
 
 // Dataset Routes
-const { authenticateToken } = require('./middleware/authMiddleware');
-
 app.get('/api/:dataset', authenticateToken, validateDataset, async (req, res, next) => {
   try {
     const { dataset } = req.params;
@@ -4866,9 +4854,6 @@ app.use((err, req, res, next) => {
   console.error('Server Error:', err.stack);
   res.status(err.status || 500).json({ error: err.message || 'Internal Server Error' });
 });
-
-// Export pool for use in routes
-module.exports = { pool };
 
 (async () => {
   await testDatabaseConnection();

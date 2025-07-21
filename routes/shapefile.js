@@ -8,7 +8,7 @@ const { promisify } = require('util');
 
 const router = express.Router();
 const { authenticateToken } = require('../middleware/authMiddleware');
-const { pool } = require('../server.js');
+const pool = require('../middleware/db');
 
 // Debug: Log to verify imports
 console.log('shapefile.js: typeof router.post:', typeof router.post);
@@ -71,18 +71,20 @@ async function processShapefile(datasetType, shpPath, dbfPath) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    console.log('shapefile.js: Attempting to create PostGIS extension');
     await client.query('CREATE EXTENSION IF NOT EXISTS postgis');
 
     const source = await shapefile.open(shpPath, dbfPath);
+    console.log('shapefile.js: Shapefile opened successfully');
     let result = await source.read();
     if (result.done) throw new Error('Shapefile contains no features');
 
     const firstFeature = result.value;
     const propKeys = Object.keys(firstFeature.properties || {});
+    console.log('shapefile.js: Feature properties:', propKeys);
 
     // Create table dynamically
     const columnDefs = propKeys.map(k => `"${k}" TEXT`).join(', ');
-
     await client.query(`
       CREATE TABLE IF NOT EXISTS "${datasetType}" (
         id SERIAL PRIMARY KEY,
@@ -90,6 +92,7 @@ async function processShapefile(datasetType, shpPath, dbfPath) {
         geom GEOMETRY(GEOMETRY, 4326)
       )
     `);
+    console.log(`shapefile.js: Table "${datasetType}" created or exists`);
 
     await client.query(`CREATE INDEX IF NOT EXISTS idx_${datasetType}_geom ON "${datasetType}" USING GIST (geom)`);
 
@@ -118,6 +121,7 @@ async function processShapefile(datasetType, shpPath, dbfPath) {
     }
 
     await client.query('COMMIT');
+    console.log(`shapefile.js: Processed ${featuresProcessed} features for ${datasetType}`);
     return featuresProcessed;
   } catch (err) {
     await client.query('ROLLBACK');
@@ -151,11 +155,13 @@ router.post('/:datasetType', authenticateToken, upload.single('file'), async (re
   const extractDir = path.join(path.dirname(zipPath), `extracted_${Date.now()}`);
 
   try {
+    console.log(`shapefile.js: Processing upload for datasetType: ${datasetType}, file: ${req.file.originalname}`);
     fs.mkdirSync(extractDir, { recursive: true });
     const zip = new AdmZip(zipPath);
     zip.extractAllTo(extractDir, true);
 
     const extractedFiles = walkSync(extractDir);
+    console.log('shapefile.js: Extracted files:', extractedFiles);
 
     const shpPath = extractedFiles.find(f => f.toLowerCase().endsWith('.shp'));
     const dbfPath = extractedFiles.find(f => f.toLowerCase().endsWith('.dbf'));
@@ -176,13 +182,12 @@ router.post('/:datasetType', authenticateToken, upload.single('file'), async (re
       dataset: datasetType
     });
   } catch (err) {
-    console.error('Upload error:', err);
-
+    console.error('shapefile.js: Upload error:', err.stack);
     try {
       if (fs.existsSync(zipPath)) await unlink(zipPath);
       if (fs.existsSync(extractDir)) await rmdir(extractDir, { recursive: true });
     } catch (cleanupErr) {
-      console.error('Cleanup failed:', cleanupErr);
+      console.error('shapefile.js: Cleanup error:', cleanupErr.stack);
     }
 
     res.status(500).json({
