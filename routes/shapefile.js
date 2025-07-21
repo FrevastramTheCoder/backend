@@ -1,7 +1,7 @@
 const express = require('express');
 const proj4 = require('proj4');
 const shp = require('shpjs');
-const multer = require('multer'); // Assuming multer is used for file uploads
+const multer = require('multer');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() }); // Store file in memory as buffer
@@ -13,6 +13,23 @@ async function processShapefile(fileBuffer, sourceCRS = 'EPSG:32737') {
 
     const processCoordinates = (coords, depth = 0) => {
       if (!Array.isArray(coords) || coords.length === 0) return null;
+      
+      // Handle flat array of alternating x, y values
+      if (coords.length % 2 === 0 && coords.every(c => typeof c === 'number')) {
+        const pairedCoords = [];
+        for (let i = 0; i < coords.length; i += 2) {
+          const x = coords[i];
+          const y = coords[i + 1];
+          if (!isFinite(x) || !isFinite(y)) {
+            console.error(`Non-finite coordinate [${x}, ${y}] at depth ${depth}`);
+            continue;
+          }
+          pairedCoords.push([x, y]);
+        }
+        return pairedCoords.length > 0 ? pairedCoords : null;
+      }
+
+      // Handle nested arrays (e.g., Polygons, MultiPolygons)
       return coords.map(coord => {
         if (Array.isArray(coord)) {
           return processCoordinates(coord, depth + 1);
@@ -44,20 +61,22 @@ async function processShapefile(fileBuffer, sourceCRS = 'EPSG:32737') {
           continue;
         }
 
+        // Transform coordinates
         const transformNested = (coords) => {
           if (Array.isArray(coords[0]) && Array.isArray(coords[0][0])) {
-            return coords.map(ring => proj4(proj4.defs(sourceCRS), proj4.defs('EPSG:4326'), ring.flat()));
+            return coords.map(ring => ring.map(pair => proj4(proj4.defs(sourceCRS), proj4.defs('EPSG:4326'), pair)));
           }
-          return proj4(proj4.defs(sourceCRS), proj4.defs('EPSG:4326'), coords.flat());
+          return coords.map(pair => proj4(proj4.defs(sourceCRS), proj4.defs('EPSG:4326'), pair));
         };
 
         transformedCoords = transformNested(transformedCoords);
         console.log(`Transformed ${transformedCoords.length} coordinate sets for feature ${feature.id || 'unknown'}`);
 
+        // Reconstruct geometry based on original type
         if (feature.geometry.type === 'Polygon') {
-          feature.geometry.coordinates = [transformedCoords];
+          feature.geometry.coordinates = [transformedCoords]; // Single ring
         } else if (feature.geometry.type === 'MultiPolygon') {
-          feature.geometry.coordinates = transformedCoords.map(coords => [coords]);
+          feature.geometry.coordinates = transformedCoords.map(coords => [coords]); // Multiple rings
         } else {
           feature.geometry.coordinates = transformedCoords;
         }
