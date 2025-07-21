@@ -7,24 +7,31 @@ async function processShapefile(fileBuffer, sourceCRS = 'EPSG:32737') {
     const geojson = await shp.parseZip(fileBuffer);
     const validFeatures = [];
 
+    const processCoordinates = (coords, depth = 0) => {
+      if (!Array.isArray(coords) || coords.length === 0) return null;
+      return coords.map(coord => {
+        if (Array.isArray(coord)) {
+          // Recursively process nested arrays
+          return processCoordinates(coord, depth + 1);
+        }
+        if (!Array.isArray(coord) || coord.length < 2) {
+          console.error(`Invalid coordinate structure at depth ${depth}:`, coord);
+          return null;
+        }
+        const [x, y] = coord;
+        if (!isFinite(x) || !isFinite(y)) {
+          console.error(`Non-finite coordinate [${x}, ${y}] at depth ${depth}`);
+          return null;
+        }
+        return [x, y];
+      }).filter(c => c !== null);
+    };
+
     for (const feature of geojson.features) {
       if (!feature.geometry || !feature.geometry.coordinates) {
-        console.error('Skipping feature: Missing geometry or coordinates');
+        console.error(`Skipping feature ${feature.id || 'unknown'}: Missing geometry or coordinates`);
         continue;
       }
-
-      const processCoordinates = (coords) => {
-        if (!Array.isArray(coords) || coords.length === 0) return null;
-        return coords.map(coord => {
-          if (!Array.isArray(coord) || coord.length < 2) return null;
-          const [x, y] = coord;
-          if (!isFinite(x) || !isFinite(y)) {
-            console.error(`Skipping coordinate [${x}, ${y}]: Non-finite values detected`);
-            return null;
-          }
-          return [x, y];
-        }).filter(c => c !== null);
-      };
 
       let transformedCoords;
       try {
@@ -34,8 +41,17 @@ async function processShapefile(fileBuffer, sourceCRS = 'EPSG:32737') {
           continue;
         }
 
-        transformedCoords = proj4(proj4.defs(sourceCRS), proj4.defs('EPSG:4326'), transformedCoords.flat());
-        feature.geometry.coordinates = transformedCoords.length > 1 ? [transformedCoords] : transformedCoords;
+        // Flatten and transform
+        const flatCoords = Array.isArray(transformedCoords[0]) ? transformedCoords.flat(Infinity) : transformedCoords;
+        console.log(`Transforming ${flatCoords.length} coordinates for feature ${feature.id || 'unknown'}`);
+        transformedCoords = proj4(proj4.defs(sourceCRS), proj4.defs('EPSG:4326'), flatCoords);
+
+        // Reconstruct geometry
+        if (['Polygon', 'MultiPolygon'].includes(feature.geometry.type)) {
+          feature.geometry.coordinates = [transformedCoords]; // Wrap for Polygon/MultiPolygon
+        } else {
+          feature.geometry.coordinates = transformedCoords;
+        }
       } catch (projError) {
         console.error(`Projection error for feature ${feature.id || 'unknown'}: ${projError.message}`);
         continue;
