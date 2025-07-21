@@ -4390,7 +4390,7 @@ const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const nodemailer = require('nodemailer');
 const rateLimit = require('express-rate-limit');
-const pool = require('./middleware/db'); // Updated import
+const pool = require('./middleware/db');
 const { authenticateToken } = require('./middleware/authMiddleware');
 
 const app = express();
@@ -4459,8 +4459,8 @@ app.use(cors({
   origin: (origin, callback) => {
     const allowedOrigins = [
       'https://aru-sdms.vercel.app',
-      'https://aru-sdms-git-main-frevastramthecoders-projects.vercel.app',
-      'https://aru-sdms-lmm221k5y-frevastramthecoders-projects.vercel.app'
+      'https://aru-sdms-lmm221k5y-frevastramthecoders-projects.vercel.app',
+      'https://aru-sdms-git-main-frevastramthecoders-projects.vercel.app'
     ];
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
