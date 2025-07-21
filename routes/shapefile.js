@@ -41,14 +41,22 @@ async function processShapefile(fileBuffer, sourceCRS = 'EPSG:32737') {
           continue;
         }
 
-        // Flatten and transform
-        const flatCoords = Array.isArray(transformedCoords[0]) ? transformedCoords.flat(Infinity) : transformedCoords;
-        console.log(`Transforming ${flatCoords.length} coordinates for feature ${feature.id || 'unknown'}`);
-        transformedCoords = proj4(proj4.defs(sourceCRS), proj4.defs('EPSG:4326'), flatCoords);
+        // Preserve original structure for projection
+        const transformNested = (coords) => {
+          if (Array.isArray(coords[0]) && Array.isArray(coords[0][0])) {
+            return coords.map(ring => proj4(proj4.defs(sourceCRS), proj4.defs('EPSG:4326'), ring.flat()));
+          }
+          return proj4(proj4.defs(sourceCRS), proj4.defs('EPSG:4326'), coords.flat());
+        };
 
-        // Reconstruct geometry
-        if (['Polygon', 'MultiPolygon'].includes(feature.geometry.type)) {
-          feature.geometry.coordinates = [transformedCoords]; // Wrap for Polygon/MultiPolygon
+        transformedCoords = transformNested(transformedCoords);
+        console.log(`Transformed ${transformedCoords.length} coordinate sets for feature ${feature.id || 'unknown'}`);
+
+        // Reconstruct geometry based on original type
+        if (feature.geometry.type === 'Polygon') {
+          feature.geometry.coordinates = [transformedCoords]; // Single ring
+        } else if (feature.geometry.type === 'MultiPolygon') {
+          feature.geometry.coordinates = transformedCoords.map(coords => [coords]); // Multiple rings
         } else {
           feature.geometry.coordinates = transformedCoords;
         }
@@ -61,7 +69,7 @@ async function processShapefile(fileBuffer, sourceCRS = 'EPSG:32737') {
     }
 
     if (validFeatures.length === 0) {
-      throw new Error('No valid features processed');
+      throw new Error('No valid features processed. Check shapefile for invalid coordinates.');
     }
 
     return validFeatures;

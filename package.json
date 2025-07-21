@@ -1,3 +1,4 @@
+
 {
   "name": "backend",
   "version": "1.0.0",
@@ -32,7 +33,7 @@
     "pg-format": "^1.0.4",
     "proj4": "^2.19.7",
     "redis": "^4.7.0",
-    "shapefile": "^0.6.6",
+    "shpjs": "^4.0.0", 
     "tmp": "^0.2.3"
   },
   "devDependencies": {
