@@ -5873,6 +5873,7 @@ const pool = require('./middleware/db');
 const { authenticateToken } = require('./middleware/authMiddleware');
 
 const app = express();
+app.enable('trust proxy'); // Enable trust proxy for rate limiting behind Render
 const PORT = process.env.PORT || 10000;
 
 // Configuration Validation
@@ -5893,7 +5894,8 @@ validateConfig();
 // Rate Limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100
+  max: 100,
+  keyGenerator: (req) => req.ip // Use IP with trust proxy enabled
 });
 app.use(limiter);
 
@@ -6108,7 +6110,7 @@ app.post('/api/:dataset', authenticateToken, validateDataset, async (req, res, n
     const { id, geom, ...recordProperties } = result.rows[0];
     res.json({
       message: 'Item uploaded!',
-      record: { id, properties: recordProperties, geometry: geom ? JSON.parse(ST_AsGeoJSON(geom)) : null }
+      record: { id, properties: recordProperties, geometry: geom ? JSON.parse(geom) : null } // Fixed ST_AsGeoJSON call
     });
   } catch (err) {
     next(err);
@@ -6130,7 +6132,7 @@ app.put('/api/:dataset/:id', authenticateToken, validateDataset, async (req, res
     const { id: recordId, geom, ...recordProperties } = result.rows[0];
     res.json({
       message: 'Updated!',
-      record: { id: recordId, properties: recordProperties, geometry: geom ? JSON.parse(ST_AsGeoJSON(geom)) : null }
+      record: { id: recordId, properties: recordProperties, geometry: geom ? JSON.parse(geom) : null } // Fixed ST_AsGeoJSON call
     });
   } catch (err) {
     next(err);
