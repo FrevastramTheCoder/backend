@@ -12,8 +12,14 @@ async function processShapefile(fileBuffer, sourceCRS = 'EPSG:32737') {
     const validFeatures = [];
 
     const processCoordinates = (coords, depth = 0) => {
-      if (!Array.isArray(coords) || coords.length === 0) return null;
-      
+      if (!Array.isArray(coords) || coords.length === 0) {
+        console.error(`Empty or invalid coordinate array at depth ${depth}`);
+        return null;
+      }
+
+      // Log raw coordinates for debugging
+      console.log(`Raw coordinates at depth ${depth}:`, coords);
+
       // Handle flat array of alternating x, y values
       if (coords.length % 2 === 0 && coords.every(c => typeof c === 'number')) {
         const pairedCoords = [];
@@ -30,11 +36,11 @@ async function processShapefile(fileBuffer, sourceCRS = 'EPSG:32737') {
       }
 
       // Handle nested arrays (e.g., Polygons, MultiPolygons)
-      return coords.map(coord => {
+      const processed = coords.map(coord => {
         if (Array.isArray(coord)) {
           return processCoordinates(coord, depth + 1);
         }
-        if (!Array.isArray(coord) || coord.length < 2) {
+        if (!Array.isArray(coord) || coord.length !== 2 || !coord.every(c => typeof c === 'number')) {
           console.error(`Invalid coordinate structure at depth ${depth}:`, coord);
           return null;
         }
@@ -45,6 +51,8 @@ async function processShapefile(fileBuffer, sourceCRS = 'EPSG:32737') {
         }
         return [x, y];
       }).filter(c => c !== null);
+
+      return processed.length > 0 ? processed : null;
     };
 
     for (const feature of geojson.features) {
@@ -64,19 +72,30 @@ async function processShapefile(fileBuffer, sourceCRS = 'EPSG:32737') {
         // Transform coordinates
         const transformNested = (coords) => {
           if (Array.isArray(coords[0]) && Array.isArray(coords[0][0])) {
-            return coords.map(ring => ring.map(pair => proj4(proj4.defs(sourceCRS), proj4.defs('EPSG:4326'), pair)));
+            return coords.map(ring => ring.map(pair => {
+              const result = proj4(proj4.defs(sourceCRS), proj4.defs('EPSG:4326'), pair);
+              return result && result.length === 2 ? result : null;
+            }).filter(p => p !== null));
           }
-          return coords.map(pair => proj4(proj4.defs(sourceCRS), proj4.defs('EPSG:4326'), pair));
+          return coords.map(pair => {
+            const result = proj4(proj4.defs(sourceCRS), proj4.defs('EPSG:4326'), pair);
+            return result && result.length === 2 ? result : null;
+          }).filter(p => p !== null);
         };
 
         transformedCoords = transformNested(transformedCoords);
         console.log(`Transformed ${transformedCoords.length} coordinate sets for feature ${feature.id || 'unknown'}`);
 
+        if (!transformedCoords || transformedCoords.length === 0) {
+          console.error(`No valid transformed coordinates for feature ${feature.id || 'unknown'}`);
+          continue;
+        }
+
         // Reconstruct geometry based on original type
         if (feature.geometry.type === 'Polygon') {
-          feature.geometry.coordinates = [transformedCoords]; // Single ring
+          feature.geometry.coordinates = [transformedCoords];
         } else if (feature.geometry.type === 'MultiPolygon') {
-          feature.geometry.coordinates = transformedCoords.map(coords => [coords]); // Multiple rings
+          feature.geometry.coordinates = transformedCoords.map(coords => [coords]);
         } else {
           feature.geometry.coordinates = transformedCoords;
         }
