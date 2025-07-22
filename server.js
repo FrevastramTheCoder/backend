@@ -7452,8 +7452,10 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
+const TwitterStrategy = require('passport-twitter').Strategy;
 const nodemailer = require('nodemailer');
 const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
+const morgan = require('morgan');
 const pool = require('./middleware/db');
 const { authenticateToken } = require('./middleware/authMiddleware');
 const shapefileUpload = require('./routes/shapefile');
@@ -7466,7 +7468,8 @@ const PORT = process.env.PORT || 10000;
 const validateConfig = () => {
   const requiredVars = [
     'JWT_SECRET', 'SESSION_SECRET', 'DB_USER', 'DB_PASS', 'DB_HOST', 'DB_NAME', 'DB_PORT',
-    'EMAIL_USER', 'EMAIL_PASS', 'CORS_ORIGIN', 'CLIENT_URL', 'SERVER_URL', 'REDIS_URL'
+    'EMAIL_USER', 'EMAIL_PASS', 'CORS_ORIGIN', 'CLIENT_URL', 'SERVER_URL', 'REDIS_URL',
+    'TWITTER_CONSUMER_KEY', 'TWITTER_CONSUMER_SECRET', 'TWITTER_CALLBACK_URL'
   ];
   const missingVars = requiredVars.filter(v => !process.env[v] || process.env[v].trim() === '');
   if (missingVars.length > 0) {
@@ -7530,7 +7533,7 @@ app.use(session({
   cookie: {
     secure: process.env.NODE_ENV === 'production',
     httpOnly: true,
-    maxAge: 24 * 60 * 60 * 1000,
+    maxAge: 24 * 60 * 60 * 1000, // 24 hours
     sameSite: 'lax'
   }
 }));
@@ -7555,6 +7558,7 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb', parameterLimit: 1000 }));
+app.use(morgan('dev'));
 app.use(passport.initialize());
 app.use(passport.session());
 
@@ -7654,8 +7658,7 @@ passport.deserializeUser(async (id, done) => {
 });
 
 async function findOrCreateUser(profile, provider) {
-  const email = profile.emails?.[0]?.value;
-  if (!email) throw new Error('No email in social profile');
+  const email = profile.emails?.[0]?.value || `${profile.id}@${provider}.com`;
   const { rows } = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
   if (rows.length > 0) return rows[0];
   const name = profile.displayName || profile.username || 'No Name';
@@ -7681,14 +7684,55 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && !process
   }));
 }
 
+if (process.env.TWITTER_CONSUMER_KEY && process.env.TWITTER_CONSUMER_SECRET && !process.env.TWITTER_CONSUMER_KEY.startsWith('your_')) {
+  passport.use(new TwitterStrategy({
+    consumerKey: process.env.TWITTER_CONSUMER_KEY.trim(),
+    consumerSecret: process.env.TWITTER_CONSUMER_SECRET.trim(),
+    callbackURL: process.env.TWITTER_CALLBACK_URL.trim()
+  }, async (token, tokenSecret, profile, done) => {
+    try {
+      const user = await findOrCreateUser(profile, 'twitter');
+      done(null, user);
+    } catch (err) {
+      done(err, null);
+    }
+  }));
+}
+
 // Root Route
 app.get('/', (req, res) => {
   res.json({
     message: 'Welcome to the ARU-SDMS Backend API',
     status: 'running',
     version: '1.0.0',
-    endpoints: { health: '/api/health', auth: '/api/auth', datasets: '/api/:dataset', upload: '/upload/:datasetType' }
+    endpoints: {
+      health: '/api/health',
+      auth: '/api/auth',
+      datasets: '/api/:dataset',
+      upload: '/upload/:datasetType',
+      twitter: '/auth/twitter'
+    }
   });
+});
+
+// Twitter Auth Routes
+app.get('/auth/twitter', passport.authenticate('twitter'));
+
+app.get('/auth/twitter/callback', passport.authenticate('twitter', {
+  failureRedirect: `${process.env.CLIENT_URL}/login?error=auth_failed`
+}), (req, res) => {
+  try {
+    const token = jwt.sign(
+      { id: req.user.id, email: req.user.email, role: req.user.role },
+      process.env.JWT_SECRET.trim(),
+      { expiresIn: '7d' }
+    );
+    console.log(`DEBUG: Twitter auth callback successful, redirecting with token for user ${req.user.email}`);
+    res.redirect(`${process.env.CLIENT_URL}/social-login?token=${encodeURIComponent(token)}`);
+  } catch (err) {
+    console.error('DEBUG: Error in Twitter auth callback:', err.stack);
+    res.redirect(`${process.env.CLIENT_URL}/login?error=auth_failed`);
+  }
 });
 
 // Dataset Validation
@@ -7900,7 +7944,8 @@ app.post('/api/auth/login', async (req, res, next) => {
 });
 
 app.post('/api/auth/logout', (req, res) => {
-  req.logout(() => {
+  req.logout(err => {
+    if (err) return res.status(500).json({ error: err.message });
     req.session.destroy(err => {
       if (err) return res.status(500).json({ error: err.message });
       res.clearCookie('connect.sid');
@@ -7950,24 +7995,11 @@ app.post('/api/auth/reset-password', async (req, res, next) => {
   }
 });
 
-if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && !process.env.GOOGLE_CLIENT_ID.startsWith('your_')) {
-  passport.use(new GoogleStrategy({
-    clientID: process.env.GOOGLE_CLIENT_ID.trim(),
-    clientSecret: process.env.GOOGLE_CLIENT_SECRET.trim(),
-    callbackURL: `${process.env.SERVER_URL}/auth/google/callback`
-  }, async (accessToken, refreshToken, profile, done) => {
-    try {
-      const user = await findOrCreateUser(profile, 'google');
-      done(null, user);
-    } catch (err) {
-      done(err, null);
-    }
-  }));
-}
-
 app.get('/auth/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
 
-app.get('/auth/google/callback', passport.authenticate('google', { failureRedirect: `${process.env.CLIENT_URL}/login` }), (req, res) => {
+app.get('/auth/google/callback', passport.authenticate('google', {
+  failureRedirect: `${process.env.CLIENT_URL}/login?error=auth_failed`
+}), (req, res) => {
   try {
     const token = jwt.sign(
       { id: req.user.id, email: req.user.email, role: req.user.role },
@@ -7995,6 +8027,11 @@ app.use('/upload', shapefileUpload);
 app.use((err, req, res, next) => {
   console.error('❌ Server Error:', err.stack);
   res.status(err.status || 500).json({ error: err.message || 'Internal Server Error', stack: process.env.NODE_ENV === 'development' ? err.stack : undefined });
+});
+
+// 404 Fallback
+app.use((req, res) => {
+  res.status(404).json({ error: 'Route not found' });
 });
 
 (async () => {
