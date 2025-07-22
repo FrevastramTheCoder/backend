@@ -6864,21 +6864,20 @@ require('dotenv').config({ path: path.resolve(__dirname, '.env') });
 const express = require('express');
 const cors = require('cors');
 const session = require('express-session');
-const RedisStore = require('connect-redis').default; // Modern connect-redis
+const RedisStore = require('connect-redis').default;
 const { createClient } = require('redis');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const nodemailer = require('nodemailer');
-const { rateLimit, ipKeyGenerator } = require('express-rate-limit'); // Add ipKeyGenerator
+const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const pool = require('./middleware/db');
 const { authenticateToken } = require('./middleware/authMiddleware');
 const shapefileUpload = require('./routes/shapefile');
 
 const app = express();
 app.set('trust proxy', 1); // Trust Render's proxy for rate limiting
-
 const PORT = process.env.PORT || 10000;
 
 // Configuration Validation
@@ -6899,12 +6898,11 @@ validateConfig();
 // Rate Limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  limit: 100, // Changed from max to limit (modern syntax)
+  limit: 100,
   standardHeaders: 'draft-8',
   legacyHeaders: false,
-  ipv6Subnet: 56, // Default subnet for IPv6
-  keyGenerator: (req) => ipKeyGenerator(req.ip, { ipv6Subnet: 56 }), // Fix for IPv6
-  validate: { ip: true } // Enable IP validation
+  keyGenerator: (req) => ipKeyGenerator(req.ip, { ipv6Subnet: 56 }),
+  validate: { ip: true }
 });
 app.use(limiter);
 
@@ -6930,7 +6928,7 @@ redisClient.on('error', err => {
 redisClient.on('connect', () => console.log('✅ Redis Client Connected'));
 redisClient.on('ready', () => {
   console.log('✅ Redis Client Ready');
-  sessionStore = new RedisStore({ client: redisClient }); // Modern connect-redis syntax
+  sessionStore = new RedisStore({ client: redisClient });
   redisErrorLogged = false;
 });
 
@@ -6951,9 +6949,9 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: process.env.NODE_ENV === 'production', // HTTPS in production
+    secure: process.env.NODE_ENV === 'production',
     httpOnly: true,
-    maxAge: 24 * 60 * 60 * 1000, // 24 hours
+    maxAge: 24 * 60 * 60 * 1000,
     sameSite: 'lax'
   }
 }));
@@ -7024,7 +7022,6 @@ const initializeTables = async () => {
         `);
         console.log(`✅ Created table ${dataset}`);
       }
-      // Ensure geometry column has SRID 4326
       await client.query(`
         SELECT UpdateGeometrySRID('${dataset}', 'geom', 4326)
       `);
@@ -7130,7 +7127,7 @@ const validateDataset = (req, res, next) => {
 app.get('/api/:dataset', authenticateToken, validateDataset, async (req, res, next) => {
   try {
     const { dataset } = req.params;
-    console.log(`Fetching records for dataset: ${dataset}`);
+    console.log(`DEBUG: Querying dataset ${dataset}`);
     const result = await pool.query(`
       SELECT id, ST_AsGeoJSON(geom) AS geom, name, description
         ${dataset === 'buildings' ? ', floor, size, offices, use, condition' : ''}
@@ -7138,7 +7135,7 @@ app.get('/api/:dataset', authenticateToken, validateDataset, async (req, res, ne
         ${dataset === 'drainageSystems' ? ', type, condition' : ''}
       FROM "${dataset}" ORDER BY id ASC
     `);
-    console.log(`Query returned ${result.rows.length} rows`);
+    console.log(`DEBUG: Retrieved ${result.rows.length} rows`);
 
     const features = result.rows.map(row => {
       try {
@@ -7163,14 +7160,14 @@ app.get('/api/:dataset', authenticateToken, validateDataset, async (req, res, ne
       }
     }).filter(feature => feature !== null);
 
-    console.log(`Processed ${features.length} valid features`);
+    console.log(`DEBUG: Processed ${features.length} valid features`);
     if (features.length === 0) {
       console.warn(`No valid features found for dataset ${dataset}`);
       return res.status(200).json({ type: 'FeatureCollection', features: [], message: 'No valid features found in dataset' });
     }
     res.json({ type: 'FeatureCollection', features });
   } catch (err) {
-    console.error(`Database error for ${dataset}:`, err.stack);
+    console.error(`DEBUG: Error in /api/${dataset}:`, err.stack);
     next(err);
   }
 });
@@ -7435,7 +7432,7 @@ app.use((err, req, res, next) => {
 
 (async () => {
   await testDatabaseConnection();
-  await initializeTables(); // Initialize tables on startup
+  await initializeTables();
   const server = app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
   server.on('error', (err) => {
     console.error('❌ Server startup error:', err.message);
