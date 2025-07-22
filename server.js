@@ -7452,7 +7452,7 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
-const TwitterStrategy = require('passport-twitter').Strategy;
+// const TwitterStrategy = require('passport-twitter').Strategy;
 const nodemailer = require('nodemailer');
 const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const morgan = require('morgan');
@@ -7468,8 +7468,8 @@ const PORT = process.env.PORT || 10000;
 const validateConfig = () => {
   const requiredVars = [
     'JWT_SECRET', 'SESSION_SECRET', 'DB_USER', 'DB_PASS', 'DB_HOST', 'DB_NAME', 'DB_PORT',
-    'EMAIL_USER', 'EMAIL_PASS', 'CORS_ORIGIN', 'CLIENT_URL', 'SERVER_URL', 'REDIS_URL',
-    'TWITTER_CONSUMER_KEY', 'TWITTER_CONSUMER_SECRET', 'TWITTER_CALLBACK_URL'
+    'EMAIL_USER', 'EMAIL_PASS', 'CORS_ORIGIN', 'CLIENT_URL', 'SERVER_URL', 'REDIS_URL'
+    // 'TWITTER_CONSUMER_KEY', 'TWITTER_CONSUMER_SECRET', 'TWITTER_CALLBACK_URL'
   ];
   const missingVars = requiredVars.filter(v => !process.env[v] || process.env[v].trim() === '');
   if (missingVars.length > 0) {
@@ -7684,6 +7684,7 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && !process
   }));
 }
 
+/*
 if (process.env.TWITTER_CONSUMER_KEY && process.env.TWITTER_CONSUMER_SECRET && !process.env.TWITTER_CONSUMER_KEY.startsWith('your_')) {
   passport.use(new TwitterStrategy({
     consumerKey: process.env.TWITTER_CONSUMER_KEY.trim(),
@@ -7698,6 +7699,7 @@ if (process.env.TWITTER_CONSUMER_KEY && process.env.TWITTER_CONSUMER_SECRET && !
     }
   }));
 }
+*/
 
 // Root Route
 app.get('/', (req, res) => {
@@ -7710,12 +7712,13 @@ app.get('/', (req, res) => {
       auth: '/api/auth',
       datasets: '/api/:dataset',
       upload: '/upload/:datasetType',
-      twitter: '/auth/twitter'
+      // twitter: '/auth/twitter'
     }
   });
 });
 
 // Twitter Auth Routes
+/*
 app.get('/auth/twitter', passport.authenticate('twitter'));
 
 app.get('/auth/twitter/callback', passport.authenticate('twitter', {
@@ -7734,6 +7737,7 @@ app.get('/auth/twitter/callback', passport.authenticate('twitter', {
     res.redirect(`${process.env.CLIENT_URL}/login?error=auth_failed`);
   }
 });
+*/
 
 // Dataset Validation
 const validateDataset = (req, res, next) => {
