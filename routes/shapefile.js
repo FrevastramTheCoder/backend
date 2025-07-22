@@ -2,7 +2,7 @@ const express = require('express');
 const proj4 = require('proj4');
 const shp = require('shpjs');
 const multer = require('multer');
-const pool = require('./db'); // Correct import for db.js in the same folder
+const pool = require('../middleware/db'); // Corrected import for db.js in middleware folder
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -168,7 +168,6 @@ router.post('/:datasetType', upload.single('file'), async (req, res, next) => {
           buildings: ['name', 'description', 'floor', 'size', 'offices', 'use', 'condition'],
           roads: ['name', 'description', 'size', 'condition', 'function'],
           drainageSystems: ['name', 'description', 'type', 'condition'],
-          // Add other datasets with their columns if needed
           footpaths: ['name', 'description'],
           electricitySupply: ['name', 'description'],
           securityLights: ['name', 'description'],

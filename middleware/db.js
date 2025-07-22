@@ -1,5 +1,5 @@
 const { Pool } = require('pg');
-require('dotenv').config({ path: require('path').resolve(__dirname, '.env') });
+require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') });
 
 const pool = new Pool({
   user: process.env.DB_USER,
@@ -7,7 +7,7 @@ const pool = new Pool({
   database: process.env.DB_NAME,
   password: process.env.DB_PASS,
   port: Number(process.env.DB_PORT),
-  ssl: { rejectUnauthorized: false }, // Suitable for Render or similar managed DBs
+  ssl: { rejectUnauthorized: false }, // Compatible with Render PostgreSQL
   connectionTimeoutMillis: 10000,
   idleTimeoutMillis: 30000,
   max: 20,
@@ -18,7 +18,7 @@ pool.on('connect', () => {
   console.log('✅ PostgreSQL Pool Connected');
 });
 
-pool.on('error', (err, client) => {
+pool.on('error', (err) => {
   console.error('❌ PostgreSQL Pool Error:', err.stack);
 });
 
