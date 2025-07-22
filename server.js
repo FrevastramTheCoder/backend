@@ -7439,8 +7439,9 @@
 //     process.exit(1);
 //   });
 // })();
+
 const path = require('path');
-require('dotenv').config({ path: path.resolve(__dirname, '.env') });
+require('dotenv').config({ path: path.resolve(__dirname, '.env'), quiet: true });
 
 const express = require('express');
 const cors = require('cors');
@@ -7490,14 +7491,12 @@ app.use(limiter);
 // Redis Client Setup
 let sessionStore;
 let redisErrorLogged = false;
-
 const redisClient = createClient({
   url: process.env.REDIS_URL,
   socket: {
     reconnectStrategy: retries => (retries > 10 ? false : Math.min(retries * 100, 3000))
   }
 });
-
 redisClient.on('error', err => {
   console.error('❌ Redis Client Error:', err.stack);
   if (!redisErrorLogged) {
@@ -7512,7 +7511,6 @@ redisClient.on('ready', () => {
   sessionStore = new RedisStore({ client: redisClient });
   redisErrorLogged = false;
 });
-
 (async () => {
   try {
     await redisClient.connect();
@@ -7555,7 +7553,6 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
 }));
-
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb', parameterLimit: 1000 }));
 app.use(passport.initialize());
@@ -7564,10 +7561,9 @@ app.use(passport.session());
 // Initialize Database Tables
 const VALID_DATASETS = [
   'buildings', 'footpaths', 'electricitySupply', 'securityLights', 'roads',
-  'drainageSystems', 'recreationalAreas', 'vimbweta', 'solidWasteCollection',
+  'drainageStructures', 'recreationalAreas', 'vimbweta', 'solidWasteCollection',
   'parking', 'vegetation', 'aruboundary'
 ];
-
 const initializeTables = async () => {
   const client = await pool.connect();
   try {
@@ -7595,7 +7591,7 @@ const initializeTables = async () => {
               size VARCHAR(50),
               condition VARCHAR(100),
               function VARCHAR(100)
-            ` : dataset === 'drainageSystems' ? `
+            ` : dataset === 'drainageStructures' ? `
               type VARCHAR(100),
               condition VARCHAR(100)
             ` : ''}
@@ -7660,10 +7656,8 @@ passport.deserializeUser(async (id, done) => {
 async function findOrCreateUser(profile, provider) {
   const email = profile.emails?.[0]?.value;
   if (!email) throw new Error('No email in social profile');
-
   const { rows } = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
   if (rows.length > 0) return rows[0];
-
   const name = profile.displayName || profile.username || 'No Name';
   const newUser = await pool.query(
     `INSERT INTO users (name, email, is_verified, role, provider) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
@@ -7713,7 +7707,7 @@ app.get('/api/:dataset', authenticateToken, validateDataset, async (req, res, ne
       SELECT id, ST_AsGeoJSON(geom) AS geom, name, description
         ${dataset === 'buildings' ? ', floor, size, offices, use, condition' : ''}
         ${dataset === 'roads' ? ', size, condition, function' : ''}
-        ${dataset === 'drainageSystems' ? ', type, condition' : ''}
+        ${dataset === 'drainageStructures' ? ', type, condition' : ''}
       FROM "${dataset}" ORDER BY id ASC
     `);
     console.log(`DEBUG: Retrieved ${result.rows.length} rows`);
@@ -7748,7 +7742,7 @@ app.get('/api/:dataset', authenticateToken, validateDataset, async (req, res, ne
     }
     res.json({ type: 'FeatureCollection', features });
   } catch (err) {
-    console.error(`DEBUG: Error in /api/${dataset}:`, err.stack);
+    console.error(`DEBUG: Error in /api/${req.params.dataset}:`, err.stack);
     next(err);
   }
 });
@@ -7756,6 +7750,7 @@ app.get('/api/:dataset', authenticateToken, validateDataset, async (req, res, ne
 app.post('/api/:dataset', authenticateToken, validateDataset, async (req, res, next) => {
   try {
     const { dataset } = req.params;
+    console.log(`DEBUG: Inserting into dataset ${dataset}`);
     const properties = req.body;
     const keys = Object.keys(properties);
     const values = Object.values(properties);
@@ -7765,13 +7760,14 @@ app.post('/api/:dataset', authenticateToken, validateDataset, async (req, res, n
       `INSERT INTO "${dataset}" (${columns}, geom) VALUES (${placeholders}, ST_SetSRID(ST_GeomFromGeoJSON($${keys.length + 1}), 4326)) RETURNING *`,
       [...values, JSON.stringify({ type: 'Point', coordinates: [0, 0] })]
     );
+    console.log(`DEBUG: Inserted record with id ${result.rows[0].id}`);
     const { id, geom, ...recordProperties } = result.rows[0];
     res.json({
       message: 'Item uploaded!',
       record: { id, properties: recordProperties, geometry: geom ? JSON.parse(geom) : null }
     });
   } catch (err) {
-    console.error(`Error inserting into ${dataset}:`, err.stack);
+    console.error(`DEBUG: Error inserting into ${req.params.dataset}:`, err.stack);
     next(err);
   }
 });
@@ -7779,6 +7775,7 @@ app.post('/api/:dataset', authenticateToken, validateDataset, async (req, res, n
 app.put('/api/:dataset/:id', authenticateToken, validateDataset, async (req, res, next) => {
   try {
     const { dataset, id } = req.params;
+    console.log(`DEBUG: Updating dataset ${dataset} id ${id}`);
     const properties = req.body;
     const keys = Object.keys(properties);
     const values = Object.values(properties);
@@ -7788,13 +7785,14 @@ app.put('/api/:dataset/:id', authenticateToken, validateDataset, async (req, res
       [...values, id]
     );
     if (result.rowCount === 0) return res.status(404).json({ error: 'Record not found' });
+    console.log(`DEBUG: Updated record id ${id}`);
     const { id: recordId, geom, ...recordProperties } = result.rows[0];
     res.json({
       message: 'Updated!',
       record: { id: recordId, properties: recordProperties, geometry: geom ? JSON.parse(geom) : null }
     });
   } catch (err) {
-    console.error(`Error updating ${dataset}/${id}:`, err.stack);
+    console.error(`DEBUG: Error updating ${req.params.dataset}/${id}:`, err.stack);
     next(err);
   }
 });
@@ -7802,11 +7800,13 @@ app.put('/api/:dataset/:id', authenticateToken, validateDataset, async (req, res
 app.delete('/api/:dataset/:id', authenticateToken, validateDataset, async (req, res, next) => {
   try {
     const { dataset, id } = req.params;
+    console.log(`DEBUG: Deleting from dataset ${dataset} id ${id}`);
     const result = await pool.query(`DELETE FROM "${dataset}" WHERE id = $1 RETURNING id`, [id]);
     if (result.rowCount === 0) return res.status(404).json({ error: 'Record not found' });
+    console.log(`DEBUG: Deleted record id ${id}`);
     res.json({ message: 'Deleted!' });
   } catch (err) {
-    console.error(`Error deleting from ${dataset}/${id}:`, err.stack);
+    console.error(`DEBUG: Error deleting from ${req.params.dataset}/${id}:`, err.stack);
     next(err);
   }
 });
@@ -7816,19 +7816,15 @@ app.post('/api/auth/register', async (req, res, next) => {
   try {
     const { name, email, password } = req.body;
     if (!name || !email || !password) return res.status(400).json({ error: 'All fields required' });
-
     const emailLower = email.toLowerCase().trim();
     const { rowCount } = await pool.query('SELECT 1 FROM users WHERE email = $1', [emailLower]);
     if (rowCount > 0) return res.status(409).json({ error: 'User already exists' });
-
     const hashedPassword = await bcrypt.hash(password, 12);
     const otp = generateOTP();
-
     const { rows } = await pool.query(
       `INSERT INTO users (name, email, password, is_verified, otp, role) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, email, is_verified`,
       [name.trim(), emailLower, hashedPassword, false, otp, 'user']
     );
-
     await transporter.sendMail({
       from: process.env.EMAIL_USER,
       to: emailLower,
@@ -7836,7 +7832,6 @@ app.post('/api/auth/register', async (req, res, next) => {
       text: `Your OTP is: ${otp}`,
       html: `<p>Your OTP is: <strong>${otp}</strong></p>`
     });
-
     res.status(201).json({ message: 'Registered. Verify your email.', user: rows[0] });
   } catch (err) {
     console.error('Error in register:', err.stack);
@@ -7848,15 +7843,12 @@ app.post('/api/auth/verify-otp', async (req, res, next) => {
   try {
     const { email, otp } = req.body;
     if (!email || !otp) return res.status(400).json({ error: 'Email and OTP required' });
-
     const emailLower = email.toLowerCase().trim();
     const { rows } = await pool.query('SELECT id, otp, is_verified FROM users WHERE email = $1', [emailLower]);
     if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
-
     const user = rows[0];
     if (user.is_verified) return res.status(400).json({ error: 'Already verified' });
     if (user.otp !== otp) return res.status(400).json({ error: 'Invalid OTP' });
-
     await pool.query('UPDATE users SET is_verified = true, otp = NULL WHERE id = $1', [user.id]);
     res.json({ message: 'Email verified' });
   } catch (err) {
@@ -7869,11 +7861,9 @@ app.post('/api/auth/resend-otp', async (req, res, next) => {
   try {
     const { email } = req.body;
     if (!email) return res.status(400).json({ error: 'Email required' });
-
     const emailLower = email.toLowerCase().trim();
     const { rows } = await pool.query('SELECT id FROM users WHERE email = $1', [emailLower]);
     if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
-
     const otp = generateOTP();
     await pool.query('UPDATE users SET otp = $1 WHERE id = $2', [otp, rows[0].id]);
     await transporter.sendMail({
@@ -7883,7 +7873,6 @@ app.post('/api/auth/resend-otp', async (req, res, next) => {
       text: `Your new OTP is: ${otp}`,
       html: `<p>Your new OTP is: <strong>${otp}</strong></p>`
     });
-
     res.json({ message: 'New OTP sent to your email' });
   } catch (err) {
     console.error('Error in resend-otp:', err.stack);
@@ -7895,17 +7884,13 @@ app.post('/api/auth/login', async (req, res, next) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
-
     const emailLower = email.toLowerCase().trim();
     const { rows } = await pool.query('SELECT * FROM users WHERE email = $1', [emailLower]);
     if (rows.length === 0) return res.status(401).json({ error: 'Invalid credentials' });
-
     const user = rows[0];
     if (!user.is_verified) return res.status(401).json({ error: 'Email not verified' });
-
     const match = await bcrypt.compare(password, user.password);
     if (!match) return res.status(401).json({ error: 'Invalid credentials' });
-
     const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, process.env.JWT_SECRET.trim(), { expiresIn: '7d' });
     res.json({ message: 'Login successful', token, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
   } catch (err) {
@@ -7928,11 +7913,9 @@ app.post('/api/auth/reset-password-request', async (req, res, next) => {
   try {
     const { email } = req.body;
     if (!email) return res.status(400).json({ error: 'Email required' });
-
     const emailLower = email.toLowerCase().trim();
     const { rows } = await pool.query('SELECT id, email FROM users WHERE email = $1', [emailLower]);
     if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
-
     const otp = generateOTP();
     await pool.query('UPDATE users SET otp = $1 WHERE id = $2', [otp, rows[0].id]);
     await transporter.sendMail({
@@ -7942,7 +7925,6 @@ app.post('/api/auth/reset-password-request', async (req, res, next) => {
       text: `Your OTP is: ${otp}`,
       html: `<p>Your OTP is: <strong>${otp}</strong></p>`
     });
-
     res.json({ message: 'Reset password OTP sent' });
   } catch (err) {
     console.error('Error in reset-password-request:', err.stack);
@@ -7954,14 +7936,11 @@ app.post('/api/auth/reset-password', async (req, res, next) => {
   try {
     const { email, otp, newPassword } = req.body;
     if (!email || !otp || !newPassword) return res.status(400).json({ error: 'All fields required' });
-
     const emailLower = email.toLowerCase().trim();
     const { rows } = await pool.query('SELECT id, otp FROM users WHERE email = $1', [emailLower]);
     if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
-
     const user = rows[0];
     if (user.otp !== otp) return res.status(400).json({ error: 'Invalid OTP' });
-
     const hashedPassword = await bcrypt.hash(newPassword, 12);
     await pool.query('UPDATE users SET password = $1, otp = NULL WHERE id = $2', [hashedPassword, user.id]);
     res.json({ message: 'Password reset successful' });
@@ -7988,13 +7967,20 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && !process
 
 app.get('/auth/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
 
-app.get('/auth/google/callback',
-  passport.authenticate('google', { failureRedirect: `${process.env.CLIENT_URL}/login` }),
-  (req, res) => {
-    const token = jwt.sign({ id: req.user.id, email: req.user.email, role: req.user.role }, process.env.JWT_SECRET.trim(), { expiresIn: '7d' });
+app.get('/auth/google/callback', passport.authenticate('google', { failureRedirect: `${process.env.CLIENT_URL}/login` }), (req, res) => {
+  try {
+    const token = jwt.sign(
+      { id: req.user.id, email: req.user.email, role: req.user.role },
+      process.env.JWT_SECRET.trim(),
+      { expiresIn: '7d' }
+    );
+    console.log(`DEBUG: Google auth callback successful, redirecting with token for user ${req.user.email}`);
     res.redirect(`${process.env.CLIENT_URL}/social-login?token=${encodeURIComponent(token)}`);
+  } catch (err) {
+    console.error('DEBUG: Error in Google auth callback:', err.stack);
+    res.redirect(`${process.env.CLIENT_URL}/login?error=auth_failed`);
   }
-);
+});
 
 // Health Check
 app.get('/api/health', async (req, res) => {
