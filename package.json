@@ -2,7 +2,7 @@
   "name": "backend",
   "version": "1.0.0",
   "description": "",
-  "main": "db.js",
+  "main": "server.js", 
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node server.js"
@@ -21,7 +21,6 @@
     "express": "^5.1.0",
     "express-rate-limit": "^8.0.1",
     "express-session": "^1.18.2",
-    "ioredis": "^5.6.1",
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
     "multer": "^2.0.1",
@@ -29,11 +28,11 @@
     "passport": "^0.7.0",
     "passport-facebook": "^3.0.0",
     "passport-google-oauth20": "^2.0.0",
-    "passport-twitter": "^0.1.5",
+    "passport-twitter": "^1.0.4",
     "pg": "^8.16.3",
     "pg-format": "^1.0.4",
     "proj4": "^2.19.7",
-    "redis": "^4.7.1",
+    "redis": "^4.7.0",
     "shpjs": "^4.0.0",
     "tmp": "^0.2.3"
   },
