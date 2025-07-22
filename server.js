@@ -6858,27 +6858,27 @@
 //   });
 // })();
 
-
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '.env') });
 
 const express = require('express');
 const cors = require('cors');
 const session = require('express-session');
-const RedisStore = require('connect-redis').default;
+const RedisStore = require('connect-redis').default; // Modern connect-redis
 const { createClient } = require('redis');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const nodemailer = require('nodemailer');
-const rateLimit = require('express-rate-limit');
+const { rateLimit, ipKeyGenerator } = require('express-rate-limit'); // Add ipKeyGenerator
 const pool = require('./middleware/db');
 const { authenticateToken } = require('./middleware/authMiddleware');
 const shapefileUpload = require('./routes/shapefile');
 
 const app = express();
-app.enable('trust proxy'); // Enable trust proxy for rate limiting behind Render
+app.set('trust proxy', 1); // Trust Render's proxy for rate limiting
+
 const PORT = process.env.PORT || 10000;
 
 // Configuration Validation
@@ -6898,9 +6898,13 @@ validateConfig();
 
 // Rate Limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
-  keyGenerator: (req) => req.ip // Simplified for compatibility
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  limit: 100, // Changed from max to limit (modern syntax)
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  ipv6Subnet: 56, // Default subnet for IPv6
+  keyGenerator: (req) => ipKeyGenerator(req.ip, { ipv6Subnet: 56 }), // Fix for IPv6
+  validate: { ip: true } // Enable IP validation
 });
 app.use(limiter);
 
@@ -6916,17 +6920,17 @@ const redisClient = createClient({
 });
 
 redisClient.on('error', err => {
-  console.error('Redis Client Error:', err.stack);
+  console.error('❌ Redis Client Error:', err.stack);
   if (!redisErrorLogged) {
     redisErrorLogged = true;
     sessionStore = new session.MemoryStore();
-    console.warn('Fallback to MemoryStore due to Redis failure');
+    console.warn('⚠️ Fallback to MemoryStore due to Redis failure');
   }
 });
-redisClient.on('connect', () => console.log('Redis Client Connected'));
+redisClient.on('connect', () => console.log('✅ Redis Client Connected'));
 redisClient.on('ready', () => {
-  console.log('Redis Client Ready');
-  sessionStore = new RedisStore({ client: redisClient });
+  console.log('✅ Redis Client Ready');
+  sessionStore = new RedisStore({ client: redisClient }); // Modern connect-redis syntax
   redisErrorLogged = false;
 });
 
@@ -6934,11 +6938,25 @@ redisClient.on('ready', () => {
   try {
     await redisClient.connect();
   } catch (err) {
-    console.error('Redis Connection Failed:', err.stack);
+    console.error('❌ Redis Connection Failed:', err.stack);
     sessionStore = new session.MemoryStore();
-    console.warn('Fallback to MemoryStore due to Redis failure');
+    console.warn('⚠️ Fallback to MemoryStore due to Redis failure');
   }
 })();
+
+// Session Middleware
+app.use(session({
+  store: () => sessionStore || new session.MemoryStore(),
+  secret: process.env.SESSION_SECRET.trim(),
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    secure: process.env.NODE_ENV === 'production', // HTTPS in production
+    httpOnly: true,
+    maxAge: 24 * 60 * 60 * 1000, // 24 hours
+    sameSite: 'lax'
+  }
+}));
 
 // Middleware
 app.use(cors({
@@ -6957,14 +6975,6 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
-}));
-
-app.use(session({
-  store: () => sessionStore || new session.MemoryStore(),
-  secret: process.env.SESSION_SECRET.trim(),
-  resave: false,
-  saveUninitialized: false,
-  cookie: { secure: process.env.NODE_ENV === 'production', maxAge: 24 * 60 * 60 * 1000, sameSite: 'lax' }
 }));
 
 app.use(express.json({ limit: '50mb' }));
@@ -7012,7 +7022,7 @@ const initializeTables = async () => {
             ` : ''}
           )
         `);
-        console.log(`Created table ${dataset}`);
+        console.log(`✅ Created table ${dataset}`);
       }
       // Ensure geometry column has SRID 4326
       await client.query(`
@@ -7419,7 +7429,7 @@ app.use('/upload', shapefileUpload);
 
 // Error Handling Middleware
 app.use((err, req, res, next) => {
-  console.error('Server Error:', err.stack);
+  console.error('❌ Server Error:', err.stack);
   res.status(err.status || 500).json({ error: err.message || 'Internal Server Error', stack: process.env.NODE_ENV === 'development' ? err.stack : undefined });
 });
 
@@ -7428,7 +7438,7 @@ app.use((err, req, res, next) => {
   await initializeTables(); // Initialize tables on startup
   const server = app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
   server.on('error', (err) => {
-    console.error('Server startup error:', err.message);
+    console.error('❌ Server startup error:', err.message);
     process.exit(1);
   });
 })();
