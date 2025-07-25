@@ -9268,7 +9268,6 @@
 //   });
 // })();
 
-
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '.env') });
 
@@ -9282,11 +9281,11 @@ const bcrypt = require('bcrypt');
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const nodemailer = require('nodemailer');
-const { rateLimit } = require('express-rate-limit');
+const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const morgan = require('morgan');
 const pool = require('./middleware/db');
 const { authenticateToken } = require('./middleware/authMiddleware');
-const shapefileUpload = require('./routes/shapefile');
+const geojsonUpload = require('./routes/geojson'); // Added import for geojson route
 
 const app = express();
 app.set('trust proxy', 1);
@@ -9304,6 +9303,8 @@ const validateConfig = () => {
     process.exit(1);
   }
   console.log('✅ Environment variables validated successfully');
+  // Log REDIS_URL for debugging (with password redacted)
+  console.log('DEBUG: REDIS_URL:', process.env.REDIS_URL.replace(/:[^@]+@/, ':<redacted>@'));
 };
 validateConfig();
 
@@ -9314,7 +9315,7 @@ const limiter = rateLimit({
   standardHeaders: 'draft-8',
   legacyHeaders: false,
   keyGenerator: (req) => {
-    const ip = req.ip || req.connection.remoteAddress;
+    const ip = ipKeyGenerator(req);
     console.log(`DEBUG: Rate limiter IP: ${ip}`);
     return ip;
   },
@@ -9334,8 +9335,12 @@ let redisErrorLogged = false;
 const redisClient = createClient({
   url: process.env.REDIS_URL,
   socket: {
+    tls: true, // Explicitly enable TLS for Upstash
     reconnectStrategy: (retries) => {
-      if (retries > 10) return new Error('Max retries reached');
+      if (retries > 10) {
+        console.error('❌ Max Redis retries reached');
+        return new Error('Max retries reached');
+      }
       return Math.min(retries * 100, 3000);
     }
   }
@@ -9357,6 +9362,7 @@ redisClient.on('ready', () => {
   redisErrorLogged = false;
   console.log('Session store:', sessionStore instanceof RedisStore ? 'RedisStore' : 'MemoryStore');
 });
+redisClient.on('reconnecting', () => console.log('🔄 Attempting to reconnect to Redis...'));
 
 // Session Middleware
 app.use(session({
@@ -9879,12 +9885,12 @@ app.get('/api/health', async (req, res) => {
   res.json({ status: 'ok', database: dbStatus ? 'connected' : 'disconnected', serverTime: new Date() });
 });
 
-// Import shapefile upload route
-app.use('/upload', shapefileUpload);
+// Import GeoJSON upload route
+app.use('/upload', geojsonUpload);
 
 // Error Handling Middleware
 app.use((err, req, res, next) => {
-  console.error('❌ Server Error:', err.stack);
+  console.error(`❌ Server Error [${req.method} ${req.originalUrl}]:`, err.stack);
   res.status(err.status || 500).json({
     error: {
       message: err.message || 'Internal Server Error',
@@ -9899,13 +9905,20 @@ app.use((req, res) => {
 });
 
 // Start Server
-(async () => {
-  await testDatabaseConnection();
-  await initializeTables();
-  await redisClient.connect();
-  const server = app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
-  server.on('error', (err) => {
-    console.error('❌ Server startup error:', err.message);
+async function startServer() {
+  try {
+    await testDatabaseConnection();
+    await initializeTables();
+    await redisClient.connect();
+    const server = app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+    server.on('error', (err) => {
+      console.error('❌ Server startup error:', err.message);
+      process.exit(1);
+    });
+  } catch (err) {
+    console.error('❌ Startup error:', err.stack);
     process.exit(1);
-  });
-})();
+  }
+}
+
+startServer();

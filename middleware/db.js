@@ -7,7 +7,7 @@ const pool = new Pool({
   database: process.env.DB_NAME,
   password: process.env.DB_PASS,
   port: Number(process.env.DB_PORT),
-  ssl: { rejectUnauthorized: false }, // Compatible with Render PostgreSQL
+  ssl: { rejectUnauthorized: false },
   connectionTimeoutMillis: 10000,
   idleTimeoutMillis: 30000,
   max: 20,
@@ -22,7 +22,6 @@ pool.on('error', (err) => {
   console.error('❌ PostgreSQL Pool Error:', err.stack);
 });
 
-// Test connection on startup
 (async () => {
   try {
     const client = await pool.connect();
