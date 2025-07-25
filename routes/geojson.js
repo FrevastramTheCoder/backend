@@ -1,17 +1,30 @@
 const express = require('express');
 const router = express.Router();
-const pool = require('../middleware/db'); // Updated import
+const pool = require('../middleware/db');
+const { authenticateToken } = require('../middleware/authMiddleware');
 const multer = require('multer');
 const upload = multer({ dest: 'uploads/' });
 const fs = require('fs').promises;
+const pgFormat = require('pg-format');
 const { transform } = require('proj4');
 
 const EPSG21037 = '+proj=utm +zone=37 +south +ellps=clrk80 +units=m +no_defs';
 const EPSG4326 = '+proj=longlat +datum=WGS84 +no_defs';
 
-router.post('/upload/:dataset', upload.single('file'), async (req, res) => {
+const VALID_DATASETS = [
+  'buildings', 'footpaths', 'electricitySupply', 'securityLights', 'roads',
+  'drainageStructures', 'recreationalAreas', 'vimbweta', 'solidWasteCollection',
+  'parking', 'vegetation', 'aruboundary'
+];
+
+router.post('/upload/:dataset', authenticateToken, upload.single('file'), async (req, res) => {
   const { dataset } = req.params;
   console.log(`DEBUG: Processing GeoJSON upload for dataset ${dataset}`);
+
+  if (!VALID_DATASETS.includes(dataset)) {
+    console.log(`ERROR: Invalid dataset: ${dataset}`);
+    return res.status(400).json({ error: { message: `Invalid dataset: ${dataset}` } });
+  }
 
   if (!req.file) {
     console.log('ERROR: No file uploaded');
@@ -51,43 +64,39 @@ router.post('/upload/:dataset', upload.single('file'), async (req, res) => {
       });
     }
 
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS buildings (
-        id SERIAL PRIMARY KEY,
-        geom GEOMETRY(MULTIPOLYGON, 4326) NOT NULL,
-        fid FLOAT,
-        building_id FLOAT,
-        name TEXT,
-        floor TEXT,
-        size FLOAT,
-        offices TEXT,
-        use TEXT,
-        conditions TEXT
-      )
-    `);
-    console.log('DEBUG: Ensured buildings table schema');
-
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      for (const feature of features) {
-        if (feature.geometry?.type !== 'MultiPolygon') {
-          console.log(`DEBUG: Skipping feature fid=${feature.properties.fid}: Invalid geometry type ${feature.geometry?.type}`);
-          continue;
-        }
-
-        const { fid, id: building_id, Name, Floor, size, Offices, use, conditions } = feature.properties;
-        const geom = JSON.stringify(feature.geometry);
-
-        await client.query(`
-          INSERT INTO buildings (geom, fid, building_id, name, floor, size, offices, use, conditions)
-          VALUES (ST_SetSRID(ST_GeomFromGeoJSON($1), 4326), $2, $3, $4, $5, $6, $7, $8, $9)
-        `, [geom, fid, building_id, Name, Floor, size, Offices, use, conditions]);
-        console.log(`DEBUG: Inserted feature fid=${fid}`);
+      const validFeatures = features.filter(feature => feature.geometry?.type === 'MultiPolygon');
+      if (validFeatures.length === 0) {
+        console.log('ERROR: No valid MultiPolygon features found');
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: { message: 'No valid MultiPolygon features found' } });
       }
+
+      const values = validFeatures.map(feature => {
+        const { fid, id: building_id, Name, Floor, size, Offices, use, conditions } = {
+          fid: null,
+          id: null,
+          Name: null,
+          Floor: null,
+          size: null,
+          Offices: null,
+          use: null,
+          conditions: null,
+          ...feature.properties
+        };
+        return [JSON.stringify(feature.geometry), fid, building_id, Name, Floor, size, Offices, use, conditions];
+      });
+
+      const query = pgFormat(`
+        INSERT INTO "${dataset}" (geom, fid, building_id, name, floor, size, offices, use, conditions)
+        VALUES %L
+      `, values.map(v => [pgFormat.literal(v[0]), ...v.slice(1)]));
+      await client.query(query);
+      console.log(`DEBUG: Inserted ${values.length} features`);
       await client.query('COMMIT');
-      console.log('DEBUG: Transaction committed');
-      res.json({ message: `Successfully uploaded ${features.length} features to ${dataset}` });
+      res.json({ message: `Successfully uploaded ${values.length} features to ${dataset}` });
     } catch (dbError) {
       await client.query('ROLLBACK');
       console.error('ERROR: Database error:', dbError.message, dbError.stack);
